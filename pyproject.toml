@@ -1,0 +1,17 @@
+[build-system]
+requires=['setuptools>=68']
+build-backend='setuptools.build_meta'
+[project]
+name='aeroforge-agent'
+version='0.1.0'
+description='Offline-first multi-agent CFD workflow orchestrator'
+readme='README.md'
+requires-python='>=3.10'
+dependencies=['pydantic>=2.0','numpy>=1.24','matplotlib>=3.7']
+[project.optional-dependencies]
+openfoam=['trimesh>=4.0','pyvista>=0.43','jinja2>=3.1','requests>=2.31','beautifulsoup4>=4.12']
+dev=['pytest>=7.4','pytest-asyncio>=0.21']
+[project.scripts]
+aeroforge='aeroforge.cli:main'
+[tool.setuptools.packages.find]
+where=['src']
