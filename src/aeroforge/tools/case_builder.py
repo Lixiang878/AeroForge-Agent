@@ -13,7 +13,6 @@
 """
 from __future__ import annotations
 
-import math
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,14 +37,18 @@ class CaseSpec:
     density: float = 1.225                     # kg/m3（forceCoeffs rhoInf 用）
     nu: float = 1.5e-5                         # m2/s
     turbulence_intensity: float = 0.005        # 入口湍流强度 I（风洞低湍流惯例）
+    turbulence_viscosity_ratio: float = 5.0    # 远场 nut/nu（外气动低湍流风洞惯例 1–10）
     n_iterations: int = 600                    # simpleFoam 稳态迭代数
     base_cell_size: float | None = None        # 背景网格尺寸；None 时取 L/base_cells_per_L
     base_cells_per_L: int = 22                 # 特征长度方向背景网格分数
     surface_refine_level: int = 2              # snappy 表面细化级数
     n_cells_between_levels: int = 2
-    max_global_cells: int = 2_000_000
+    max_global_cells: int = 3_000_000
     moving_ground: bool = True                 # 地面随来流移动（地面效应更真实）
+    upstream_slip_ground: bool = True          # 上游地面滑移（抑制地面边界层堵死离地间隙）
+    slip_ground_offset_L: float = 0.75         # 滑移地面在体前 0.75L 处转为移动地面
     wake_refinement: bool = True               # 尾流区局部加密（斜面涡/基座压力关键）
+    wake_refine_level: int = 2               # 尾流加密盒的细化级数
     margins: tuple[float, float, float, float] = DEFAULT_MARGINS
 
     @property
@@ -99,7 +102,7 @@ def build_case(case_dir: str | Path, spec: CaseSpec) -> Path:
     (case / "system" / "controlDict").write_text(_control_dict(spec, dom), encoding="utf-8")
     (case / "system" / "fvSchemes").write_text(_fv_schemes(), encoding="utf-8")
     (case / "system" / "fvSolution").write_text(_fv_solution(), encoding="utf-8")
-    (case / "system" / "blockMeshDict").write_text(_block_mesh_dict(dom, base), encoding="utf-8")
+    (case / "system" / "blockMeshDict").write_text(_block_mesh_dict(dom, base, spec), encoding="utf-8")
     (case / "system" / "surfaceFeatureExtractDict").write_text(
         _surface_feature_dict(spec), encoding="utf-8")
     (case / "system" / "snappyHexMeshDict").write_text(
@@ -109,19 +112,23 @@ def build_case(case_dir: str | Path, spec: CaseSpec) -> Path:
 
 # ---------------------------------------------------------------- 内部工具
 def _turbulence_inlet(spec: CaseSpec) -> tuple[float, float]:
-    """入口 k/omega：标准湍流强度-长度尺度公式。"""
+    """入口 k/omega：由湍流强度 I 与远场粘度比 nut/nu 定义。
+
+    外气动低湍流风洞惯例：I≈0.5%，nut/nu≈1–10（避免远场涡粘过大
+    导致人为的边界层增厚与提前分离）。
+    """
     I = spec.turbulence_intensity
     U = spec.velocity
-    L = spec.characteristic_length
     k = 1.5 * (I * U) ** 2
-    length_scale = 0.03 * L          # 湍流长度尺度 ~3% 特征长度（风洞低湍流）
-    omega = math.sqrt(k) / (0.09 ** 0.25 * length_scale)
+    omega = k / (spec.turbulence_viscosity_ratio * spec.nu)
     return k, omega
 
 
 def _field_u(spec: CaseSpec) -> str:
     ground_bc = ("movingWallVelocity;\n        value           uniform (%g 0 0)"
                  % spec.velocity) if spec.moving_ground else "noSlip"
+    upstream_ground = ("symmetryPlane" if spec.upstream_slip_ground
+                       else ground_bc)
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
 {{
@@ -151,6 +158,10 @@ boundaryField
     "(top|sideLow|sideHigh)"
     {{
         type            symmetryPlane;
+    }}
+    groundUpstream
+    {{
+        type            {upstream_ground};
     }}
     ground
     {{
@@ -189,7 +200,7 @@ boundaryField
         type            fixedValue;
         value           uniform 0;
     }}
-    "(top|sideLow|sideHigh)"
+    "(top|sideLow|sideHigh|groundUpstream)"
     {{
         type            symmetryPlane;
     }}
@@ -230,7 +241,7 @@ boundaryField
         inletValue      uniform {value:g};
         value           uniform {value:g};
     }}
-    "(top|sideLow|sideHigh)"
+    "(top|sideLow|sideHigh|groundUpstream)"
     {{
         type            symmetryPlane;
     }}
@@ -269,7 +280,7 @@ boundaryField
         type            calculated;
         value           uniform 0;
     }}
-    "(top|sideLow|sideHigh)"
+    "(top|sideLow|sideHigh|groundUpstream)"
     {{
         type            symmetryPlane;
     }}
@@ -472,10 +483,125 @@ relaxationFactors
 """
 
 
-def _block_mesh_dict(dom: dict, base: float) -> str:
-    nx = max(8, int(round((dom["x_max"] - dom["x_min"]) / base)))
+def _block_mesh_dict(dom: dict, base: float, spec: CaseSpec) -> str:
     ny = max(8, int(round((dom["y_max"] - dom["y_min"]) / base)))
     nz = max(8, int(round((dom["z_max"] - dom["z_min"]) / base)))
+
+    use_split = spec.upstream_slip_ground and spec.bbox is not None
+    if use_split:
+        # 上游地面为滑移面（模拟风洞边界层吸除，避免地面边界层堵死
+        # 离地间隙），在体前 slip_ground_offset_L 处转为移动地面。
+        L = spec.bbox.x_max - spec.bbox.x_min
+        xs = spec.bbox.x_min - spec.slip_ground_offset_L * L
+        xs = max(dom["x_min"] + 4 * base, xs)
+        nx1 = max(4, int(round((xs - dom["x_min"]) / base)))
+        nx2 = max(8, int(round((dom["x_max"] - xs) / base)))
+        return f"""/* AeroForge-Agent 自动生成 */
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      blockMeshDict;
+}}
+
+scale   1;
+
+vertices
+(
+    ({dom['x_min']:g} {dom['y_min']:g} 0)
+    ({xs:g} {dom['y_min']:g} 0)
+    ({dom['x_max']:g} {dom['y_min']:g} 0)
+    ({dom['x_min']:g} {dom['y_max']:g} 0)
+    ({xs:g} {dom['y_max']:g} 0)
+    ({dom['x_max']:g} {dom['y_max']:g} 0)
+    ({dom['x_min']:g} {dom['y_min']:g} {dom['z_max']:g})
+    ({xs:g} {dom['y_min']:g} {dom['z_max']:g})
+    ({dom['x_max']:g} {dom['y_min']:g} {dom['z_max']:g})
+    ({dom['x_min']:g} {dom['y_max']:g} {dom['z_max']:g})
+    ({xs:g} {dom['y_max']:g} {dom['z_max']:g})
+    ({dom['x_max']:g} {dom['y_max']:g} {dom['z_max']:g})
+);
+
+blocks
+(
+    hex (0 1 4 3 6 7 10 9) ({nx1} {ny} {nz}) simpleGrading (1 1 1)
+    hex (1 2 5 4 7 8 11 10) ({nx2} {ny} {nz}) simpleGrading (1 1 1)
+);
+
+edges
+(
+);
+
+boundary
+(
+    inlet
+    {{
+        type patch;
+        faces
+        (
+            (0 6 9 3)
+        );
+    }}
+    outlet
+    {{
+        type patch;
+        faces
+        (
+            (2 8 11 5)
+        );
+    }}
+    groundUpstream
+    {{
+        type symmetryPlane;
+        faces
+        (
+            (0 3 4 1)
+        );
+    }}
+    ground
+    {{
+        type wall;
+        faces
+        (
+            (1 4 5 2)
+        );
+    }}
+    top
+    {{
+        type symmetryPlane;
+        faces
+        (
+            (6 7 10 9)
+            (7 8 11 10)
+        );
+    }}
+    sideLow
+    {{
+        type symmetryPlane;
+        faces
+        (
+            (0 1 7 6)
+            (1 2 8 7)
+        );
+    }}
+    sideHigh
+    {{
+        type symmetryPlane;
+        faces
+        (
+            (3 4 10 9)
+            (4 5 11 10)
+        );
+    }}
+);
+
+mergePatchPairs
+(
+);
+"""
+
+    nx = max(8, int(round((dom["x_max"] - dom["x_min"]) / base)))
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
 {{
@@ -589,31 +715,45 @@ FoamFile
 """
 
 
+def _wake_box(spec: CaseSpec, dom: dict) -> tuple[str, float, float, float, float, float, float] | None:
+    """尾流加密盒参数：从斜面前缘延伸到下游 1.2L，覆盖斜面涡与基座回流区。"""
+    if not spec.wake_refinement:
+        return None
+    b = spec.bbox
+    L = b.x_max - b.x_min
+    W = b.y_max - b.y_min
+    H = b.z_max - b.z_min
+    x0 = b.x_max - 0.4 * L
+    x1 = min(b.x_max + 1.2 * L, dom["x_max"] - 0.2 * L)
+    y0 = b.y_min - 0.8 * W
+    y1 = b.y_max + 0.8 * W
+    z1 = min(b.z_max + 0.6 * H, dom["z_max"] - 0.2 * H)
+    return ("wakeBox", x0, y0, 0.0, x1, y1, z1)
+
+
 def _snappy_dict(spec: CaseSpec, dom: dict) -> str:
     # locationInMesh：物体正上方域顶附近，保证在流体域内
     cx = (spec.bbox.x_min + spec.bbox.x_max) / 2.0
     lz = dom["z_max"] * 0.9
     level = spec.surface_refine_level
-    # 尾流加密盒：从斜面前缘延伸到下游 3L，覆盖斜面涡与基座回流区
-    if spec.wake_refinement:
-        b = spec.bbox
-        L = b.x_max - b.x_min
-        W = b.y_max - b.y_min
-        H = b.z_max - b.z_min
-        x0 = b.x_max - 0.3 * L
-        x1 = min(b.x_max + 3.0 * L, dom["x_max"] - 0.2 * L)
-        y0 = b.y_min - 0.5 * W
-        y1 = b.y_max + 0.5 * W
-        z1 = min(b.z_max + 0.8 * H, dom["z_max"] - 0.2 * H)
+    wb = _wake_box(spec, dom)
+    if wb:
+        _, wx0, wy0, wz0, wx1, wy1, wz1 = wb
+        # ESI 版语法：searchableBox 定义在 geometry 节，refinementRegions 按名引用；
+        # 内联式写法会被静默忽略（'entries were not used'）导致尾流未加密。
+        wake_geometry = (
+            f"    wakeBox\n    {{\n"
+            f"        type searchableBox;\n"
+            f"        min ({wx0:g} {wy0:g} {wz0:g});\n"
+            f"        max ({wx1:g} {wy1:g} {wz1:g});\n"
+            f"    }}\n")
         wake_region = (
             f"        wakeBox\n        {{\n"
             f"            mode inside;\n"
-            f"            type searchableBox;\n"
-            f"            min ({x0:g} {y0:g} 0);\n"
-            f"            max ({x1:g} {y1:g} {z1:g});\n"
-            f"            levels (({level} {level}));\n"
+            f"            levels ((1 {spec.wake_refine_level}));\n"
             f"        }}\n")
     else:
+        wake_geometry = ""
         wake_region = ""
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
@@ -635,7 +775,7 @@ geometry
         type triSurfaceMesh;
         name {spec.surface};
     }}
-}};
+{wake_geometry}}};
 
 castellatedMeshControls
 {{

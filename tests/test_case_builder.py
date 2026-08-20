@@ -23,6 +23,7 @@ def test_boundary_conditions_and_force_coeffs(tmp_path):
     case = build_case(tmp_path / "case", _spec(tmp_path))
     u = (case / "0" / "U").read_text(encoding="utf-8")
     assert "fixedValue" in u and "noSlip" in u and "movingWallVelocity" in u
+    assert "groundUpstream" in u and "symmetryPlane" in u   # 上游滑移地面
     ctrl = (case / "system" / "controlDict").read_text(encoding="utf-8")
     assert "forceCoeffs" in ctrl and "Aref" in ctrl and "rhoInf" in ctrl
     k = (case / "0" / "k").read_text(encoding="utf-8")
@@ -36,9 +37,11 @@ def test_boundary_conditions_and_force_coeffs(tmp_path):
 def test_blockmesh_patches_and_snappy_surface(tmp_path):
     case = build_case(tmp_path / "case", _spec(tmp_path))
     bm = (case / "system" / "blockMeshDict").read_text(encoding="utf-8")
-    for patch in ("inlet", "outlet", "ground", "top", "sideLow", "sideHigh"):
+    for patch in ("inlet", "outlet", "ground", "groundUpstream", "top",
+                  "sideLow", "sideHigh"):
         assert patch in bm
     assert "symmetryPlane" in bm
+    assert "hex (0 1 4 3 6 7 10 9)" in bm    # 双块结构（上游滑移地面）
     sh = (case / "system" / "snappyHexMeshDict").read_text(encoding="utf-8")
     assert "body.stl" in sh and "locationInMesh" in sh and "addLayers" in sh
 

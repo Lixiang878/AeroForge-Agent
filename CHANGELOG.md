@@ -12,10 +12,13 @@
 - **Ahmed body 参数化几何**（纯 Python 生成封闭 binary STL，含前鼻圆角
   R100/R50 与流形封闭性/外法向一致性检查）与 `examples/verify_ahmed.py`
   端到端基准验证（支持 20°/25° 两个验证角，自动生成 verification_report.md）。
-- **验证档案** `docs/VALIDATION.md`：五轮真实 OpenFOAM 实验的可追溯记录
-  （Cd 1.056 → 0.58 → 0.56 → 0.55 → 0.49，每轮修正同向逼近实验值；
-  尚未达 ±10% 容差，偏差来源与改进路线如实记录）。
+- **验证档案** `docs/VALIDATION.md`：八轮真实 OpenFOAM 实验的可追溯记录
+  （Cd 1.056 → 0.58 → 0.56 → 0.55 → 0.49 → 平台期 0.49；设置级修正全部
+  同向逼近实验值，剩余偏差归因于稳态 RANS/壁面函数模型形态与无支腿
+  简化几何，改进路线如实记录）。
 - 网格质量门禁：checkMesh 不通过即终止求解。
+- 风洞工程设置：阻塞比≈4% 大域、上游地面滑移（模拟边界层吸除）、
+  低湍流入口（I=0.5%，远场 nut/nu=5）、尾流加密盒。
 - 新增 16 个离线单元测试（STL 工具 / CaseBuilder / RuntimeBridge / 解析器 / 验证）。
 
 ### Changed
@@ -32,6 +35,9 @@
 - movingWallVelocity 边界条件字典格式错误。
 - forceCoeffs 列解析：按 ESI OpenFOAM v2412 实际 13 列格式定位 Cd/Cl/Cm
   （经 Cd=Cd_f+Cd_r、Cl=Cl_f+Cl_r 数值关系交叉验证）。
+- snappyHexMesh 尾流加密盒被静默忽略：内联 searchableBox 写法在 ESI 版
+  无效（“entries were not used”），改为 geometry 节定义 + refinementRegions
+  按名引用后加密首次生效（网格 67 万 → 115 万单元）。
 
 ## 0.1.0 - 2026-08-19
 
