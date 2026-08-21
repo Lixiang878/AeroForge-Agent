@@ -2,6 +2,9 @@
 
 **离线优先的 CFD 多 Agent 工作流：从一句自然语言到真实 OpenFOAM 求解与基准验证。**
 
+> 接手 / 审查者请先读 [`HANDOVER.md`](HANDOVER.md)：已做工作、当前真实状态、
+> 已知坑、未达标项与复核指南都在那里。
+
 AeroForge-Agent 是一个 CFD 工作流多 Agent 系统：需求解析 → 参数化几何 → 从零生成
 OpenFOAM 算例 → 网格（blockMesh + snappyHexMesh）→ 稳态 RANS 求解（simpleFoam,
 k-ω SST）→ 气动力提取与报告。检测到 OpenFOAM 运行时（本机或 WSL）即执行**真实求解**；
