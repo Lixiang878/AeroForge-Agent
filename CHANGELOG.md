@@ -19,6 +19,10 @@
 - 网格质量门禁：checkMesh 不通过即终止求解。
 - 风洞工程设置：阻塞比≈4% 大域、上游地面滑移（模拟边界层吸除）、
   低湍流入口（I=0.5%，远场 nut/nu=5）、尾流加密盒。
+- **瞬态动画能力**：CaseBuilder 支持 transient 模式（pimpleFoam / Euler /
+  PIMPLE / CFL 自适应步长）；`examples/animate_ahmed.py` 复用已收敛稳态场
+  作初场继续瞬态演化，按动画帧写盘；每个算例目录生成 `<case>.foam`
+  标记文件，ParaView 直接打开即可播放涡脱落/尾迹摆动的动态过程。
 - 新增 16 个离线单元测试（STL 工具 / CaseBuilder / RuntimeBridge / 解析器 / 验证）。
 
 ### Changed

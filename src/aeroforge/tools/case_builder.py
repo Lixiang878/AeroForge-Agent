@@ -38,6 +38,11 @@ class CaseSpec:
     nu: float = 1.5e-5                         # m2/s
     turbulence_intensity: float = 0.005        # 入口湍流强度 I（风洞低湍流惯例）
     turbulence_viscosity_ratio: float = 5.0    # 远场 nut/nu（外气动低湍流风洞惯例 1–10）
+    solver_mode: str = "steady"                # steady=simpleFoam / transient=pimpleFoam
+    end_time: float | None = None              # 瞬态物理时长 (s)；None 时自动取 L/U
+    delta_t: float | None = None               # 瞬态步长 (s)；None 时按 CFL≈0.7 估计
+    max_co: float = 0.8                        # 瞬态最大库朗数（PIMPLE 可用至 ~2）
+    write_interval_t: float | None = None      # 瞬态写盘间隔 (s)；None 时取总时长/40
     n_iterations: int = 600                    # simpleFoam 稳态迭代数
     base_cell_size: float | None = None        # 背景网格尺寸；None 时取 L/base_cells_per_L
     base_cells_per_L: int = 22                 # 特征长度方向背景网格分数
@@ -100,13 +105,15 @@ def build_case(case_dir: str | Path, spec: CaseSpec) -> Path:
         _turbulence_properties(), encoding="utf-8")
 
     (case / "system" / "controlDict").write_text(_control_dict(spec, dom), encoding="utf-8")
-    (case / "system" / "fvSchemes").write_text(_fv_schemes(), encoding="utf-8")
-    (case / "system" / "fvSolution").write_text(_fv_solution(), encoding="utf-8")
+    (case / "system" / "fvSchemes").write_text(_fv_schemes(spec), encoding="utf-8")
+    (case / "system" / "fvSolution").write_text(_fv_solution(spec), encoding="utf-8")
     (case / "system" / "blockMeshDict").write_text(_block_mesh_dict(dom, base, spec), encoding="utf-8")
     (case / "system" / "surfaceFeatureExtractDict").write_text(
         _surface_feature_dict(spec), encoding="utf-8")
     (case / "system" / "snappyHexMeshDict").write_text(
         _snappy_dict(spec, dom), encoding="utf-8")
+    # ParaView 入口标记文件：双击/直接打开即可用 OpenFOAM reader 播放时间序列
+    (case / (case.name + ".foam")).write_text("", encoding="utf-8")
     return case
 
 
@@ -334,6 +341,64 @@ def _control_dict(spec: CaseSpec, dom: dict) -> str:
     L = dom["L"]
     front_area = ((spec.bbox.y_max - spec.bbox.y_min)
                   * (spec.bbox.z_max - spec.bbox.z_min))
+    if spec.solver_mode == "transient":
+        # 瞬态（pimpleFoam）：物理时长默认 3 个对流时间尺度，
+        # 可调步长按 CFL≤0.8 控制，写盘间隔对齐动画帧（默认 40 帧）。
+        end = spec.end_time or 3.0 * L / spec.velocity
+        dt = spec.delta_t or 1e-4
+        wi = spec.write_interval_t or end / 40.0
+        return f"""/* AeroForge-Agent 自动生成 */
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}}
+
+application     pimpleFoam;
+
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         {end:g};
+deltaT          {dt:g};
+adjustTimeStep  yes;
+maxCo           {spec.max_co:g};
+maxDeltaT       {5 * dt:g};
+
+writeControl    adjustableRunTime;
+writeInterval   {wi:g};
+purgeWrite      0;
+writeFormat     ascii;
+writePrecision  6;
+timeFormat      general;
+timePrecision   6;
+
+runTimeModifiable false;
+
+functions
+{{
+    forceCoeffs1
+    {{
+        type            forceCoeffs;
+        libs            ("libforces.so");
+        writeControl    adjustableRunTime;
+        writeInterval   {wi / 2:g};
+
+        patches         ({spec.surface});
+        rho             rhoInf;
+        rhoInf          {spec.density:g};
+        liftDir         (0 0 1);
+        dragDir         (1 0 0);
+        CofR            (0 0 0);
+        pitchAxis       (0 1 0);
+        magUInf         {spec.velocity:g};
+        lRef            {L:g};
+        Aref            {front_area:g};
+    }}
+}}
+"""
     write_interval = max(50, spec.n_iterations // 10)
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
@@ -386,86 +451,69 @@ functions
 """
 
 
-def _fv_schemes() -> str:
-    return """/* AeroForge-Agent 自动生成 */
+def _fv_schemes(spec: CaseSpec | None = None) -> str:
+    ddt = "Euler" if (spec and spec.solver_mode == "transient") else "steadyState"
+    return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       dictionary;
     object      fvSchemes;
-}
+}}
 
 ddtSchemes
-{
-    default         steadyState;
-}
+{{
+    default         {ddt};
+}}
 
 gradSchemes
-{
+{{
     default         Gauss linear;
-}
+}}
 
 divSchemes
-{
+{{
     default         none;
     div(phi,U)      bounded Gauss linearUpwind grad(U);
     div(phi,k)      bounded Gauss upwind;
     div(phi,omega)  bounded Gauss upwind;
     div((nuEff*dev2(T(grad(U))))) Gauss linear;
-}
+}}
 
 laplacianSchemes
-{
+{{
     default         Gauss linear corrected;
-}
+}}
 
 interpolationSchemes
-{
+{{
     default         linear;
-}
+}}
 
 snGradSchemes
-{
+{{
     default         corrected;
-}
+}}
 
 wallDist
-{
+{{
     method          meshWave;
-}
+}}
 """
 
 
-def _fv_solution() -> str:
-    return """/* AeroForge-Agent 自动生成 */
-FoamFile
+def _fv_solution(spec: CaseSpec | None = None) -> str:
+    if spec and spec.solver_mode == "transient":
+        algo = """PIMPLE
 {
-    version     2.0;
-    format      ascii;
-    class       dictionary;
-    object      fvSolution;
+    nOuterCorrectors    2;
+    nCorrectors         2;
+    nNonOrthogonalCorrectors 0;
 }
-
-solvers
-{
-    p
-    {
-        solver          GAMG;
-        smoother        DICGaussSeidel;
-        tolerance       1e-7;
-        relTol          0.01;
-    }
-    "(U|k|omega)"
-    {
-        solver          smoothSolver;
-        smoother        symGaussSeidel;
-        tolerance       1e-8;
-        relTol          0.1;
-    }
-}
-
-SIMPLE
+"""
+    else:
+        algo = """SIMPLE
 {
     nNonOrthogonalCorrectors 0;
     consistent      yes;
@@ -481,6 +529,62 @@ relaxationFactors
     }
 }
 """
+    return f"""/* AeroForge-Agent 自动生成 */
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSolution;
+}}
+
+solvers
+{{
+    p
+    {{
+        solver          GAMG;
+        smoother        DICGaussSeidel;
+        tolerance       1e-7;
+        relTol          0.1;
+    }}
+    pFinal
+    {{
+        solver          GAMG;
+        smoother        DICGaussSeidel;
+        tolerance       1e-7;
+        relTol          0;
+    }}
+    "(U|k|omega)"
+    {{
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-8;
+        relTol          0.1;
+    }}
+    UFinal
+    {{
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-8;
+        relTol          0;
+    }}
+    kFinal
+    {{
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-8;
+        relTol          0;
+    }}
+    omegaFinal
+    {{
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-8;
+        relTol          0;
+    }}
+}}
+
+{algo}"""
 
 
 def _block_mesh_dict(dom: dict, base: float, spec: CaseSpec) -> str:

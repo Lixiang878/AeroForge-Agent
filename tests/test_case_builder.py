@@ -53,3 +53,20 @@ def test_domain_margins_scale_with_body(tmp_path):
     # 上游 3L + 下游 6L + 物体
     assert (dom["x_max"] - dom["x_min"]) > 8.9 * L
     assert dom["z_min"] == 0.0
+
+
+def test_paraview_foam_marker_created(tmp_path):
+    case = build_case(tmp_path / "case", _spec(tmp_path))
+    assert (case / "case.foam").exists()   # ParaView OpenFOAM reader 入口
+
+
+def test_transient_mode_dicts(tmp_path):
+    spec = _spec(tmp_path, solver_mode="transient")
+    case = build_case(tmp_path / "case", spec)
+    ctrl = (case / "system" / "controlDict").read_text(encoding="utf-8")
+    assert "pimpleFoam" in ctrl and "adjustTimeStep" in ctrl
+    assert "purgeWrite      0" in ctrl          # 保留全部帧供动画播放
+    schemes = (case / "system" / "fvSchemes").read_text(encoding="utf-8")
+    assert "Euler" in schemes
+    sol = (case / "system" / "fvSolution").read_text(encoding="utf-8")
+    assert "PIMPLE" in sol and "nOuterCorrectors" in sol

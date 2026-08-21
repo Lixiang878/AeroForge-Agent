@@ -69,7 +69,12 @@ pytest -q                        # offline unit tests (no OpenFOAM needed)
 python examples/demo_bmw_x3.py            # agent pipeline demo
 python examples/verify_ahmed.py           # end-to-end validation, 20 slant angle
 python examples/verify_ahmed.py --slant 25  # classic 25-degree reporting case
+python examples/animate_ahmed.py          # transient pimpleFoam run for ParaView animation
 ```
+
+Every generated case contains a `<case>.foam` marker: open it in ParaView
+(OpenFOAM reader) to play the time-resolved wake dynamics (vortex shedding)
+after a transient run.
 
 OpenFOAM paths:
 
@@ -129,7 +134,12 @@ pytest -q                        # 离线单元测试（无需 OpenFOAM）
 python examples/demo_bmw_x3.py            # Agent 流水线演示
 python examples/verify_ahmed.py           # 端到端真实验证（20°，需 OpenFOAM）
 python examples/verify_ahmed.py --slant 25  # 经典 25° 工况（如实报告）
+python examples/animate_ahmed.py          # 瞬态 pimpleFoam：生成 ParaView 可播放的动态过程
 ```
+
+**ParaView 动态可视化**：每个生成的算例目录都含 `<case>.foam` 标记文件；
+瞬态运行完成后用 ParaView 直接打开该文件（OpenFOAM reader），时间轴播放即可
+看到尾流涡脱落/摆动的动态过程（变量选 U，可用 Slice/StreamTracer 观察涡结构）。
 
 OpenFOAM 接入：Linux 直接装到 PATH；Windows 在 WSL 中安装（如 v2412），
 RuntimeBridge 自动探测 `/usr/lib/openfoam/openfoam*`。无 OpenFOAM 时全流程
