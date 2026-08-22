@@ -1,6 +1,7 @@
 from aeroforge.tools.validation import (AHMED_CD_REF_25, compare_cd,
                                         render_validation_markdown)
 from aeroforge.tools.openfoam_tools import (parse_force_coeffs,
+                                            parse_force_breakdown,
                                             parse_mesh_stats, parse_residuals)
 
 
@@ -54,3 +55,25 @@ def test_parse_mesh_stats(tmp_path):
     assert s["cell_count"] == 456789
     assert s["max_non_orthogonality"] == 51.2
     assert s["passed_checkmesh"] is True
+
+
+def test_parse_force_breakdown_from_solver_log(tmp_path):
+    # ESI v2411+ 求解日志 forceCoeffs 块（Total/Pressure/Viscous/Internal）
+    log = tmp_path / "log.simpleFoam"
+    log.write_text(
+        "forceCoeffs forceCoeffs1 write:\n"
+        "    Coefficient\tTotal\tPressure\tViscous\tInternal\n"
+        "    Cd:\t0.40\t0.38\t0.02\t0\n"
+        "    Cd(f):\t0.20\t0.19\t0.01\t0\n"
+        "ExecutionTime = 1 s\n"
+        "forceCoeffs forceCoeffs1 write:\n"
+        "    Coefficient\tTotal\tPressure\tViscous\tInternal\n"
+        "    Cd:\t0.50\t0.48\t0.02\t0\n"
+        "    Cd(f):\t0.25\t0.24\t0.01\t0\n", encoding="utf-8")
+    bd = parse_force_breakdown(log)
+    assert abs(bd["cd_pressure"] - 0.43) < 1e-9   # 尾段均值 (0.38+0.48)/2
+    assert abs(bd["cd_viscous"] - 0.02) < 1e-9
+
+
+def test_parse_force_breakdown_missing_log(tmp_path):
+    assert parse_force_breakdown(tmp_path / "nope.log") == {}

@@ -27,11 +27,36 @@ def test_boundary_conditions_and_force_coeffs(tmp_path):
     ctrl = (case / "system" / "controlDict").read_text(encoding="utf-8")
     assert "forceCoeffs" in ctrl and "Aref" in ctrl and "rhoInf" in ctrl
     k = (case / "0" / "k").read_text(encoding="utf-8")
-    assert "kqRWallFunction" in k
+    assert "kLowReWallFunction" in k        # 默认 lowRe 壁面处理
     assert "[0 2 -2 0 0 0 0]" in k          # 湍动能 m2/s2
     omega = (case / "0" / "omega").read_text(encoding="utf-8")
     assert "omegaWallFunction" in omega
     assert "[0 0 -1 0 0 0 0]" in omega      # 比耗散率 1/s
+    nut = (case / "0" / "nut").read_text(encoding="utf-8")
+    assert "nutUSpaldingWallFunction" in nut
+
+
+def test_wall_function_fallback_preset(tmp_path):
+    """wallFunction 预设回退到经典对数律设置（快速筛查用途）。"""
+    case = build_case(tmp_path / "case", _spec(tmp_path, wall_treatment="wallFunction"))
+    k = (case / "0" / "k").read_text(encoding="utf-8")
+    assert "kqRWallFunction" in k
+    nut = (case / "0" / "nut").read_text(encoding="utf-8")
+    assert "nutkWallFunction" in nut
+    sh = (case / "system" / "snappyHexMeshDict").read_text(encoding="utf-8")
+    assert "relativeSizes       true" in sh and "nSurfaceLayers 2" in sh
+
+
+def test_lowre_layer_thickness_estimated_from_yplus(tmp_path):
+    """lowRe 首层厚度按目标 y+ 估算（40 m/s 水下约 1.2e-5 m），绝对尺寸模式。"""
+    spec = _spec(tmp_path)
+    case = build_case(tmp_path / "case", spec)
+    sh = (case / "system" / "snappyHexMeshDict").read_text(encoding="utf-8")
+    assert "relativeSizes       false" in sh
+    assert f"nSurfaceLayers {spec.n_wall_layers}" in sh
+    assert "firstLayerThickness 1.162e-05" in sh
+    first = spec.first_layer_thickness()
+    assert 1.0e-5 < first < 1.4e-5           # y+≈1.2 @ U=40, nu=1.5e-5
 
 
 def test_blockmesh_patches_and_snappy_surface(tmp_path):

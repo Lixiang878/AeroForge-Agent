@@ -24,7 +24,8 @@ class PhysicsConfigAgent:
             n_iterations=int(kwargs.get('n_iterations',600)),
             base_cell_size=kwargs.get('base_cell_size'),
             base_cells_per_L=int(kwargs.get('base_cells_per_L',22)),
-            surface_refine_level=int(kwargs.get('surface_refine_level',2)))
+            surface_refine_level=int(kwargs.get('surface_refine_level',2)),
+            wall_treatment=str(kwargs.get('wall_treatment','lowRe')))
         build_case(case,spec)
         runtime=RuntimeBridge()
         return {'status':'completed','solver':solver,'case_dir':case,'spec':spec,

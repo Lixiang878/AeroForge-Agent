@@ -38,6 +38,9 @@ class MeshReport(BaseModel):
     mesh_path: Path; cell_count: int = 0; max_non_orthogonality: float = 0.0; max_skewness: float = 0.0; passed_checkmesh: bool = False
 class ForceCoeffs(BaseModel):
     cd: float; cl: float; cm: Optional[float] = None
+    # 压差/摩擦分解（来自求解日志 forceCoeffs 块的 Pressure/Viscous 列；
+    # coefficient.dat 的 Cd(f)/Cd(r) 列并非摩擦/压差，见 openfoam_tools）
+    cd_pressure: Optional[float] = None; cd_viscous: Optional[float] = None
 class SimReport(BaseModel):
     case_dir: Path; converged: bool; final_residuals: dict[str, float] = Field(default_factory=dict); force_coeffs: Optional[ForceCoeffs] = None; flux_error_percent: float = 0.0; runtime_seconds: float = 0.0
 class FinalReport(BaseModel):

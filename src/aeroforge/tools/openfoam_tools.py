@@ -79,6 +79,29 @@ def parse_residuals(log_path: str | Path) -> dict[str, float]:
     return out
 
 
+def parse_force_breakdown(log_path: str | Path) -> dict[str, float]:
+    """从求解日志最后的 forceCoeffs 输出块解析 Cd/Cl 的压差-摩擦分解。
+
+    ESI v2412 日志格式（制表符分隔）：
+        Coefficient<Tab>Total<Tab>Pressure<Tab>Viscous<Tab>Internal
+        Cd:<Tab>0.5059<Tab>0.4878<Tab>0.0181<Tab>0
+    返回 {"cd_pressure": ..., "cd_viscous": ...}；未找到时返回空 dict。
+    """
+    p = Path(log_path)
+    if not p.exists():
+        return {}
+    text = p.read_text(encoding="utf-8", errors="ignore")
+    blocks = re.findall(
+        r"Cd:\s*([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)",
+        text)
+    out: dict[str, float] = {}
+    if blocks:
+        tail = blocks[-5:]  # 尾段均值，抑制瞬时抖动
+        out = {"cd_pressure": sum(float(b[1]) for b in tail) / len(tail),
+               "cd_viscous": sum(float(b[2]) for b in tail) / len(tail)}
+    return out
+
+
 def parse_force_coeffs(case_dir: str | Path) -> ForceCoeffs | None:
     """解析 forceCoeffs 后处理输出 coefficient.dat。
 
@@ -112,10 +135,11 @@ def parse_force_coeffs(case_dir: str | Path) -> ForceCoeffs | None:
                 return i
         return fallback
 
-    # ESI OpenFOAM（含 v2412）forceCoeffs 实际写 13 列：
-    # Time Cd Cd_f Cd_r Cl Cl_f Cl_r Cm <力/矩分量>；
-    # 已用数值关系验证：Cd_f+Cd_r=Cd，Cl_f+Cl_r=Cl，(Cl_f-Cl_r)/2=Cm。
-    # 注释头只描述方向不给出列名，故按列数做格式判定，再退回表头/位置。
+    # ESI OpenFOAM（含 v2412）forceCoeffs 写 13 列：
+    # Time Cd Cd(f) Cd(r) Cl Cl(f) Cl(r) CmPitch CmRoll CmYaw Cs Cs(f) Cs(r)
+    # 注意：dat 里的 Cd(f)/Cd(r) 列并非摩擦/压差分解（实测各约为 Cd 之半，
+    # 与求解日志 forceCoeffs 块的 Pressure/Viscous 分解对不上）；本解析
+    # 只取总量列 Cd(1)/Cl(4)/CmPitch(7)，压差-摩擦分解见 parse_force_breakdown。
     ncols = len(rows[0])
     if ncols >= 8:
         i_cd, i_cl, i_cm = 1, 4, 7

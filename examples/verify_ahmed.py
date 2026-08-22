@@ -33,11 +33,12 @@ async def main() -> int:
     ap = argparse.ArgumentParser(description="Ahmed body CFD validation")
     ap.add_argument("--slant", type=float, default=20.0, choices=[20.0, 25.0],
                     help="后窗斜角；20° 为定量通过判据角，25° 为经典报告角")
-    ap.add_argument("--iterations", type=int, default=800)
+    ap.add_argument("--iterations", type=int, default=2500,
+                    help="稳态迭代数（low-Re 精细网格默认 2500）")
     ap.add_argument("--velocity", type=float, default=40.0,
                     help="来流速度 m/s（默认 40，对应 Re≈2.78e6）")
-    ap.add_argument("--refine-level", type=int, default=3,
-                    help="表面/尾流加密级数（默认 3；2 更快但偏差更大）")
+    ap.add_argument("--refine-level", type=int, default=4,
+                    help="表面加密级数（默认 4；低 Re 壁面要求前缘曲率可解析）")
     ap.add_argument("--base-div", type=int, default=22,
                     help="背景网格密度：特征长度方向单元数（默认 22）")
     args = ap.parse_args()
@@ -67,6 +68,10 @@ async def main() -> int:
         "最终残差": sim.final_residuals,
         "case 目录": str(state['outputs']['physics']['case_dir']),
     }
+    if sim.force_coeffs is not None and sim.force_coeffs.cd_pressure is not None:
+        fc = sim.force_coeffs
+        extra["Cd 分解"] = (f"压差 {fc.cd_pressure:.4f} + 摩擦 {fc.cd_viscous:.4f}"
+                            "（Ahmed 20° 文献量级：压差 ~0.15 / 摩擦 ~0.03–0.05）")
 
     if not runtime.available or sim.force_coeffs is None or not sim.converged:
         print("[verify] 无真实求解结果，验证未执行（dry-run）。")

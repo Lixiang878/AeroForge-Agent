@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import math
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,13 +49,27 @@ class CaseSpec:
     base_cells_per_L: int = 22                 # 特征长度方向背景网格分数
     surface_refine_level: int = 2              # snappy 表面细化级数
     n_cells_between_levels: int = 2
-    max_global_cells: int = 3_000_000
+    max_global_cells: int = 8_000_000
     moving_ground: bool = True                 # 地面随来流移动（地面效应更真实）
     upstream_slip_ground: bool = True          # 上游地面滑移（抑制地面边界层堵死离地间隙）
     slip_ground_offset_L: float = 0.75         # 滑移地面在体前 0.75L 处转为移动地面
     wake_refinement: bool = True               # 尾流区局部加密（斜面涡/基座压力关键）
     wake_refine_level: int = 2               # 尾流加密盒的细化级数
+    nose_refinement: bool = True               # 前缘局部加密（圆角曲率/滞止线解析关键）
+    nose_refine_level: int = 5                 # 前缘加密盒细化级数
     margins: tuple[float, float, float, float] = DEFAULT_MARGINS
+    # 壁面处理预设：
+    # - "lowRe"：y+≈1 积分到壁面（kOmegaSST 低 Re 路线，15 层边界层，
+    #   首层厚度按 y+ 目标自动估算）。Ahmed 验证表明 2 层粗边界层 +
+    #   对数律壁面函数会把摩擦阻力高估近一个量级（Cd(f) 0.25 vs 物理
+    #   期望 ~0.03），lowRe 为默认推荐。
+    # - "wallFunction"：经典对数律壁面函数 + 2 层相对厚度边界层（粗而快，
+    #   仅用于快速筛查；y+ 落在 1–30 缓冲区时结果不可信）。
+    wall_treatment: str = "lowRe"
+    first_layer_yplus: float = 1.2             # lowRe 首层目标 y+（留余量）
+    n_wall_layers: int = 15                    # lowRe 边界层层数
+    layer_expansion: float = 1.2               # 边界层膨胀比
+    n_parallel: int | None = None              # 并行核数；设置时生成 decomposeParDict
 
     @property
     def characteristic_length(self) -> float:
@@ -62,6 +77,12 @@ class CaseSpec:
         if b is None:
             raise ValueError("bbox not set; call build_case or set bbox first")
         return max(b.x_max - b.x_min, b.y_max - b.y_min, b.z_max - b.z_min)
+
+    def first_layer_thickness(self) -> float:
+        """由目标 y+ 估算首层绝对厚度：Cf≈0.003（Re~3e6 平板经验），
+        u_tau = U*sqrt(Cf/2)，y1 = y+*nu/u_tau。"""
+        u_tau = self.velocity * math.sqrt(0.003 / 2.0)
+        return self.first_layer_yplus * self.nu / u_tau
 
 
 def domain_from_bbox(bbox: BoundingBox, margins: tuple[float, float, float, float],
@@ -95,9 +116,9 @@ def build_case(case_dir: str | Path, spec: CaseSpec) -> Path:
     (case / "0" / "U").write_text(_field_u(spec), encoding="utf-8")
     (case / "0" / "p").write_text(_field_p(spec.surface), encoding="utf-8")
     k_inf, omega_inf = _turbulence_inlet(spec)
-    (case / "0" / "k").write_text(_field_scalar("k", k_inf, spec.surface), encoding="utf-8")
-    (case / "0" / "omega").write_text(_field_scalar("omega", omega_inf, spec.surface), encoding="utf-8")
-    (case / "0" / "nut").write_text(_field_nut(spec.surface), encoding="utf-8")
+    (case / "0" / "k").write_text(_field_scalar("k", k_inf, spec.surface, spec.wall_treatment), encoding="utf-8")
+    (case / "0" / "omega").write_text(_field_scalar("omega", omega_inf, spec.surface, spec.wall_treatment), encoding="utf-8")
+    (case / "0" / "nut").write_text(_field_nut(spec.surface, spec.wall_treatment), encoding="utf-8")
 
     (case / "constant" / "transportProperties").write_text(
         _transport_properties(spec), encoding="utf-8")
@@ -112,6 +133,9 @@ def build_case(case_dir: str | Path, spec: CaseSpec) -> Path:
         _surface_feature_dict(spec), encoding="utf-8")
     (case / "system" / "snappyHexMeshDict").write_text(
         _snappy_dict(spec, dom), encoding="utf-8")
+    if spec.n_parallel:
+        (case / "system" / "decomposeParDict").write_text(
+            _decompose_dict(spec.n_parallel), encoding="utf-8")
     # ParaView 入口标记文件：双击/直接打开即可用 OpenFOAM reader 播放时间序列
     (case / (case.name + ".foam")).write_text("", encoding="utf-8")
     return case
@@ -219,9 +243,15 @@ boundaryField
 """
 
 
-def _field_scalar(name: str, value: float, surface: str) -> str:
+def _field_scalar(name: str, value: float, surface: str, treatment: str = "lowRe") -> str:
     # k: 湍动能 m2/s2 -> [0 2 -2]；omega: 比耗散率 1/s -> [0 0 -1]
     dims = "[0 2 -2 0 0 0 0]" if name == "k" else "[0 0 -1 0 0 0 0]"
+    # omegaWallFunction 自带粘性底层 blending，两种处理通用；
+    # k 在低 Re 积分到壁面时需 kLowReWallFunction
+    if name == "k":
+        k_bc = "kLowReWallFunction" if treatment == "lowRe" else "kqRWallFunction"
+    else:
+        k_bc = "omegaWallFunction"
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
 {{
@@ -254,14 +284,17 @@ boundaryField
     }}
     "(ground|{surface})"
     {{
-        type            {"kqRWallFunction" if name == "k" else "omegaWallFunction"};
+        type            {k_bc};
         value           uniform {value:g};
     }}
 }}
 """
 
 
-def _field_nut(surface: str) -> str:
+def _field_nut(surface: str, treatment: str = "lowRe") -> str:
+    # nutUSpaldingWallFunction 基于 Spalding 连续律，y+ 从 <1 到 >100 全范围
+    # 一致有效；nutkWallFunction 仅在对数区（y+>30）成立
+    nut_bc = "nutUSpaldingWallFunction" if treatment == "lowRe" else "nutkWallFunction"
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
 {{
@@ -293,7 +326,7 @@ boundaryField
     }}
     "(ground|{surface})"
     {{
-        type            nutkWallFunction;
+        type            {nut_bc};
         value           uniform 0;
     }}
 }}
@@ -796,6 +829,22 @@ mergePatchPairs
 """
 
 
+def _decompose_dict(n: int) -> str:
+    return f"""/* AeroForge-Agent 自动生成 */
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      decomposeParDict;
+}}
+
+numberOfSubdomains {n};
+
+method          scotch;
+"""
+
+
 def _surface_feature_dict(spec: CaseSpec) -> str:
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
@@ -835,11 +884,50 @@ def _wake_box(spec: CaseSpec, dom: dict) -> tuple[str, float, float, float, floa
     return ("wakeBox", x0, y0, 0.0, x1, y1, z1)
 
 
+def _nose_box(spec: CaseSpec) -> tuple[str, float, float, float, float, float, float] | None:
+    """前缘加密盒参数：罩住前鼻圆角与滞止线，半径外扩 0.2L。
+
+    前缘圆角曲率若不被表面网格解析（如 R100 圆角弧上仅 ~5 个单元），
+    加速吸力峰消失、滞止区虚大，压差阻力可虚高 ~0.2——Ahmed 验证
+    八轮平台期的主要根源之一。
+    """
+    if not spec.nose_refinement:
+        return None
+    b = spec.bbox
+    L = b.x_max - b.x_min
+    pad = 0.2 * L
+    return ("noseBox", b.x_min - pad, b.y_min - pad, 0.0,
+            b.x_min + pad, b.y_max + pad, b.z_max + pad)
+
+
 def _snappy_dict(spec: CaseSpec, dom: dict) -> str:
     # locationInMesh：物体正上方域顶附近，保证在流体域内
     cx = (spec.bbox.x_min + spec.bbox.x_max) / 2.0
     lz = dom["z_max"] * 0.9
     level = spec.surface_refine_level
+    if spec.wall_treatment == "lowRe":
+        first = spec.first_layer_thickness()
+        layer_block = (
+            f"    relativeSizes       false;\n"
+            f"    layers\n    {{\n"
+            f"        \"{spec.surface}\"\n        {{\n"
+            f"            nSurfaceLayers {spec.n_wall_layers};\n"
+            f"        }}\n    }}\n"
+            f"    expansionRatio        {spec.layer_expansion:g};\n"
+            f"    firstLayerThickness {first:.3e};\n"
+            f"    minThickness          {first / 2:.3e};\n")
+        relax_iter, layer_iter = 8, 70
+    else:
+        layer_block = (
+            f"    relativeSizes       true;\n"
+            f"    layers\n    {{\n"
+            f"        \"{spec.surface}\"\n        {{\n"
+            f"            nSurfaceLayers 2;\n"
+            f"        }}\n    }}\n"
+            f"    expansionRatio        {spec.layer_expansion:g};\n"
+            f"    finalLayerThickness   0.3;\n"
+            f"    minThickness          0.1;\n")
+        relax_iter, layer_iter = 5, 50
     wb = _wake_box(spec, dom)
     if wb:
         _, wx0, wy0, wz0, wx1, wy1, wz1 = wb
@@ -859,6 +947,23 @@ def _snappy_dict(spec: CaseSpec, dom: dict) -> str:
     else:
         wake_geometry = ""
         wake_region = ""
+    nb = _nose_box(spec)
+    if nb:
+        _, nx0, ny0, nz0, nx1, ny1, nz1 = nb
+        nose_geometry = (
+            f"    noseBox\n    {{\n"
+            f"        type searchableBox;\n"
+            f"        min ({nx0:g} {ny0:g} {nz0:g});\n"
+            f"        max ({nx1:g} {ny1:g} {nz1:g});\n"
+            f"    }}\n")
+        nose_region = (
+            f"        noseBox\n        {{\n"
+            f"            mode inside;\n"
+            f"            levels ((1 {spec.nose_refine_level}));\n"
+            f"        }}\n")
+    else:
+        nose_geometry = ""
+        nose_region = ""
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
 {{
@@ -879,7 +984,7 @@ geometry
         type triSurfaceMesh;
         name {spec.surface};
     }}
-{wake_geometry}}};
+{wake_geometry}{nose_geometry}}};
 
 castellatedMeshControls
 {{
@@ -893,7 +998,7 @@ castellatedMeshControls
     (
         {{
             file "{spec.surface}.eMesh";
-            level {level};
+            level {level + 1 if spec.wall_treatment == "lowRe" else level};
         }}
     );
 
@@ -909,7 +1014,7 @@ castellatedMeshControls
 
     refinementRegions
     {{
-{wake_region}    }}
+{wake_region}{nose_region}    }}
 
     locationInMesh ({cx:g} 0 {lz:g});
 
@@ -930,21 +1035,10 @@ snapControls
 
 addLayersControls
 {{
-    relativeSizes       true;
-    layers
-    {{
-        "{spec.surface}"
-        {{
-            nSurfaceLayers 2;
-        }}
-    }}
-    expansionRatio        1.2;
-    finalLayerThickness   0.3;
-    minThickness          0.1;
-    nGrow                 0;
+{layer_block}    nGrow                 0;
     featureAngle          60;
     slipFeatureAngle      30;
-    nRelaxIter            5;
+    nRelaxIter            {relax_iter};
     nSmoothSurfaceNormals 1;
     nSmoothNormals        3;
     nSmoothThickness      10;
@@ -952,7 +1046,7 @@ addLayersControls
     maxThicknessToMedialRatio 0.3;
     minMedialAxisAngle    90;
     nBufferCellsNoExtrude 0;
-    nLayerIter            50;
+    nLayerIter            {layer_iter};
 }}
 
 meshQualityControls

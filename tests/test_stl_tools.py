@@ -21,8 +21,8 @@ def test_ahmed_stl_binary_layout_and_surface(tmp_path):
     ahmed_body_stl(out)
     data = out.read_bytes()
     n_tri = struct.unpack("<I", data[80:84])[0]
-    # 轮廓 2n+5 点（n=8 圆弧段）：侧扇 2(m-2) + 包面 2m = 4m-4 = 8n+16
-    assert n_tri == 8 * 8 + 16
+    # 轮廓 4n+5 点（n=24 圆弧段）：侧扇 2(m-2) + 包面 2m = 4m-4 = 8n+16
+    assert n_tri == 8 * 24 + 16
     assert len(data) == 84 + n_tri * 50
     assert is_watertight(out)                # 封闭表面，snappyHexMesh 前提
     assert signed_volume(out) > 0            # 法向一致朝外（体积为正）

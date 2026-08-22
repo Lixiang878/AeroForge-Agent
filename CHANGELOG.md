@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.3.0 - 2026-08-22
+
+### Fixed（Cd 偏差根因修复——推翻 v0.2.0 的归因）
+- **力系数分解语义纠错**：v2412 `coefficient.dat` 的 `Cd(f)/Cd(r)` 列并非
+  摩擦/压差分解（实测各约为 Cd 之半）；真实分解在求解日志 forceCoeffs 块的
+  Pressure/Viscous 列。据此重审 v0.2.0 八轮实验：摩擦分量一直正常
+  （~0.018），**96% 的 Cd 来自压差阻力**，"壁面函数高估摩擦"的旧假设不成立。
+- **前缘曲率未解析（真正主因）**：R100 前鼻圆角仅 8 段离散 + 表面网格
+  ~33mm，圆角上仅约 5 个单元，加速吸力峰无法形成，整个前表面近钝体滞止
+  （Cp 均值 +0.62、无负压区），前缘压差贡献 ~0.42（正常 ~0.1）。
+  修复：`arc_segments` 8→24、新增前缘加密盒 `noseBox`（level 5）。
+- **边界层分辨率**：2 层相对厚度边界层 + 对数律壁面函数（y+ 2.4–652 跨
+  缓冲区）不足以支撑外气动精度；新增 low-Re 壁面处理预设（见 Added）。
+
+### Added
+- **low-Re 壁面预设**（`CaseSpec.wall_treatment="lowRe"`，新默认）：15 层
+  绝对厚度边界层，首层厚度按目标 y+（1.2）与平板经验 Cf 自动估算
+  （40 m/s 下约 12μm）；nut→nutUSpaldingWallFunction（全 y+ 范围有效）、
+  k→kLowReWallFunction。原 2 层壁面函数配置保留为
+  `wall_treatment="wallFunction"` 快速筛查回退。
+- **前缘加密盒 noseBox**：罩住前鼻圆角与滞止线（外扩 0.2L，level 5）。
+- **压差/摩擦分解解析**（`parse_force_breakdown`）：从求解日志提取
+  Pressure/Viscous 分解入 `ForceCoeffs.cd_pressure/cd_viscous`，
+  验证报告自动展示。
+- **并行求解配置生成**：`CaseSpec.n_parallel` 设置时自动生成
+  `system/decomposeParDict`（scotch）。
+- **表面分区 Cp 诊断工具** `examples/surface_cp_zones.py`：读收敛场按
+  外法向分区（前表面/顶面/斜面/基座/侧面/底面）输出面积加权 Cp 与压差
+  阻力贡献，用于偏差归因（零求解成本）。
+- 新增 4 个离线测试（low-Re 层参数估算 / wallFunction 回退 / 分解解析 /
+  缺失日志回退），共 32 tests。
+
+### Changed
+- `verify_ahmed.py` 默认参数升级为推荐配置：表面 level 4、迭代 2500。
+- `max_global_cells` 默认 3M→8M（低 Re 网格规模需要）。
+
 ## 0.2.0 - 2026-08-20
 
 ### Added

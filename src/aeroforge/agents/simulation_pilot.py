@@ -2,7 +2,7 @@ import time
 from pathlib import Path
 from ..core.models import SimReport
 from ..core.runtime_bridge import RuntimeBridge
-from ..tools.openfoam_tools import run_solver,parse_residuals,parse_force_coeffs
+from ..tools.openfoam_tools import run_solver,parse_residuals,parse_force_coeffs,parse_force_breakdown
 class SimulationPilotAgent:
     """求解：运行 simpleFoam 并解析残差/力系数。
 
@@ -29,6 +29,10 @@ class SimulationPilotAgent:
         log=res.get('log_path')
         residuals=parse_residuals(log) if log else {}
         fc=parse_force_coeffs(case)
+        if fc is not None and log:
+            bd=parse_force_breakdown(log)
+            fc.cd_pressure=bd.get('cd_pressure')
+            fc.cd_viscous=bd.get('cd_viscous')
         converged=(res['returncode']==0) and bool(residuals)
         return {'status':'completed' if converged else 'failed',
                 'runtime_backend':bridge.info.backend,

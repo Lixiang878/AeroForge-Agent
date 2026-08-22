@@ -112,13 +112,16 @@ def ahmed_body_stl(path: str | Path, slant_angle_deg: float = 25.0,
                    slant_length: float | None = None,
                    nose_top_radius: float = 0.100,
                    nose_bottom_radius: float = 0.050,
-                   arc_segments: int = 8) -> BoundingBox:
+                   arc_segments: int = 24) -> BoundingBox:
     """生成 Ahmed body 参数化 STL（binary），返回其包围盒。
 
     坐标系：x 为来流方向，y 为展向，z 为垂向；底面位于 z=ground_clearance。
     含原始实验几何的关键特征：前鼻圆角（顶部 R100mm / 底部 R50mm）与
     后窗斜面；简化声明：省略支腿。圆角对降低前缘分离、复现实验 Cd
     至关重要（尖角前缘会把 Cd 推到 ~1.0 量级）。
+    arc_segments：圆角离散段数。8 段时 R100 圆角每片面片 ~20mm，
+    表面网格无法解析曲率，前缘滞止区虚大（Cd 虚高 ~0.2）；
+    24 段（默认）配合前缘加密盒可将前缘吸力峰解析出来。
     """
     d = dict(AHMED_DEFAULTS)
     L = length or d["length"]
