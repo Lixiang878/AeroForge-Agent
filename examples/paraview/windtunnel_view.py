@@ -26,6 +26,7 @@ CASE = globals().get('CASE', None)
 from paraview.simple import (  # noqa: E402
     OpenFOAMReader, STLReader, StreamTracer, Slice, Show,
     ColorBy, Render, GetActiveView, SaveScreenshot, GetAnimationScene,
+    CellDatatoPointData,
 )
 
 
