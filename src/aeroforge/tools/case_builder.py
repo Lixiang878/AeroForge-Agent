@@ -35,6 +35,7 @@ class CaseSpec:
     surface: str = "body"
     bbox: BoundingBox | None = None
     velocity: float = 20.0                     # m/s，来流速度
+    yaw_angle_deg: float = 0.0                 # 风向角（偏航）：入口矢量/移动地面/阻力方向绕 z 轴旋转
     density: float = 1.225                     # kg/m3（forceCoeffs rhoInf 用）
     nu: float = 1.5e-5                         # m2/s
     turbulence_intensity: float = 0.005        # 入口湍流强度 I（风洞低湍流惯例）
@@ -155,9 +156,28 @@ def _turbulence_inlet(spec: CaseSpec) -> tuple[float, float]:
     return k, omega
 
 
+def _inlet_vec(spec: CaseSpec) -> str:
+    """按风向角计算入口速度矢量字符串（yaw=0 时保持 (U 0 0) 字面值）。"""
+    yaw = math.radians(getattr(spec, "yaw_angle_deg", 0.0) or 0.0)
+    uy = spec.velocity * math.sin(yaw)
+    if abs(uy) < 1e-9:
+        return f"{spec.velocity:g} 0 0"
+    ux = spec.velocity * math.cos(yaw)
+    return f"{ux:.6g} {uy:.6g} 0"
+
+
+def _drag_dir(spec: CaseSpec) -> str:
+    """阻力方向随风向旋转（升力恒为 z）。"""
+    yaw = math.radians(getattr(spec, "yaw_angle_deg", 0.0) or 0.0)
+    if abs(yaw) < 1e-9:
+        return "(1 0 0)"
+    return f"({math.cos(yaw):.6g} {math.sin(yaw):.6g} 0)"
+
+
 def _field_u(spec: CaseSpec) -> str:
-    ground_bc = ("movingWallVelocity;\n        value           uniform (%g 0 0)"
-                 % spec.velocity) if spec.moving_ground else "noSlip"
+    vec = _inlet_vec(spec)
+    ground_bc = (f"movingWallVelocity;\n        value           uniform ({vec})"
+                 ) if spec.moving_ground else "noSlip"
     upstream_ground = ("symmetryPlane" if spec.upstream_slip_ground
                        else ground_bc)
     return f"""/* AeroForge-Agent 自动生成 */
@@ -171,20 +191,20 @@ FoamFile
 
 dimensions      [0 1 -1 0 0 0 0];
 
-internalField   uniform ({spec.velocity} 0 0);
+internalField   uniform ({vec});
 
 boundaryField
 {{
     inlet
     {{
         type            fixedValue;
-        value           uniform ({spec.velocity} 0 0);
+        value           uniform ({vec});
     }}
     outlet
     {{
         type            inletOutlet;
         inletValue      uniform (0 0 0);
-        value           uniform ({spec.velocity} 0 0);
+        value           uniform ({vec});
     }}
     "(top|sideLow|sideHigh)"
     {{
@@ -374,6 +394,7 @@ def _control_dict(spec: CaseSpec, dom: dict) -> str:
     L = dom["L"]
     front_area = ((spec.bbox.y_max - spec.bbox.y_min)
                   * (spec.bbox.z_max - spec.bbox.z_min))
+    drag_dir = _drag_dir(spec)
     if spec.solver_mode == "transient":
         # 瞬态（pimpleFoam）：物理时长默认 3 个对流时间尺度，
         # 可调步长按 CFL≤0.8 控制，写盘间隔对齐动画帧（默认 40 帧）。
@@ -423,7 +444,7 @@ functions
         rho             rhoInf;
         rhoInf          {spec.density:g};
         liftDir         (0 0 1);
-        dragDir         (1 0 0);
+        dragDir         {drag_dir};
         CofR            (0 0 0);
         pitchAxis       (0 1 0);
         magUInf         {spec.velocity:g};
@@ -473,7 +494,7 @@ functions
         rho             rhoInf;
         rhoInf          {spec.density:g};
         liftDir         (0 0 1);
-        dragDir         (1 0 0);
+        dragDir         {drag_dir};
         CofR            (0 0 0);
         pitchAxis       (0 1 0);
         magUInf         {spec.velocity:g};

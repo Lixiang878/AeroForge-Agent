@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.4.0 - 2026-08-23
+
+**回归初心：一句话 → 仿真 → 风洞级可视化。** v0.3.0 期间项目重心漂移到
+Ahmed Cd 定量验证的学术路线上，可视化环节反而仍是合成假图。本版把主线
+拉回"好看的真实场可视化"，并清理虚饰与冗余。
+
+### Fixed（可视化三连坑——v0.2.0 假图 + 渲染不可见根因）
+- **删除假图**：`viz_tools` 的 `plot_velocity_field/plot_streamlines/
+  plot_pressure_surface` 用 tanh/正弦合成场画"CFD 图"且调用时传入 None，
+  从未读过任何真实数据。已彻底删除，报告改为嵌入真实渲染图。
+- **CellData 陷阱**：OpenFOAM reader 输出的场在 CellData，必须先
+  `CellDatatoPointData` 再喂 `StreamTracer/Slice`，否则流线积分为空、
+  切片无法着色。
+- **VisRTX 渲染后端画不出线**：ParaView 落在 VisRTX 后端时线与半透明
+  全部不可见（不透明 STL 正常，极具迷惑性）。修复：显式
+  `CreateView('RenderView')`（OpenGL）+ 流线转 **Tube 不透明管**
+  （同时更接近风洞烟线质感）。
+- **种子位置硬编码错误**：烟线种子曾落在车体内部（被删单元区），
+  一条流线都追不出来；现按 STL 包围盒自动推导上游烟线源。
+- **二进制 STL 解析**：渲染脚本只认 ASCII STL；现自动识别二进制格式
+  （80B 头 + uint32 面数 + 50B/面）。
+
+### Added
+- **windtunnel_viz 模块**：pvpython 自动发现（PATH/常见安装目录）→
+  模板脚本（随包分发）离屏渲染三机位 2400×1350 烟线图 → 产物校验。
+  无收敛场/无 pvpython → skipped + 原因入报告，绝不造假图。
+- **风洞烟线构图**：中线垂直烟幕 + 两层横向排线，速度 Cool-Warm 着色
+  （量程自适应 1.08×自由流），深色地面 + 中心纵剖衬底 + 色标图例；
+  三机位（3/4 前侧 / 后上尾流 / 正侧）按包围盒自动取景。
+- **风向角（偏航）一句话支持**：`风向角 30°` 同时旋转入口矢量、移动
+  地面与 forceCoeffs 阻力方向（升力恒 z）；`SimulationTask.yaw_angle_deg`
+  → `CaseSpec.yaw_angle_deg`。
+- **对象名三级提取**：引号 > 车型/物体关键词词典（宝马/奔驰/Ahmed/
+  NACA/圆柱…，中英混排含 `宝马 X3` 空格合并）> 去停用词兜底。
+- **CLI 升级**：`aeroforge "…" --upload-stl x.stl --no-viz`，输出报告
+  路径、Cd 及压差/摩擦分解、可视化图路径或跳过原因。
+- 测试 32→41（可视化诚实性 / 偏航矢量旋转 / 对象名与风向角解析 /
+  dry-run 零假图契约）。
+
+### Removed
+- `core/message_bus.py`、`core/state_machine.py`：编排层从未使用的
+  死代码（README 曾宣称"消息总线+状态机通信层"，与事实不符，一并纠正）。
+- workspace 十六个 task_*/diag_* 旧算例目录（6.6GB→1.5GB，仅保留最优
+  验证算例 diag_case5；全部结论已固化在 docs/VALIDATION.md）。
+
 ## 0.3.0 - 2026-08-22
 
 ### Fixed（Cd 偏差根因修复——推翻 v0.2.0 的归因）

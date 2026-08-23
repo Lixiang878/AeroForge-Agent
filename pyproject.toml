@@ -3,8 +3,8 @@ requires=['setuptools>=68']
 build-backend='setuptools.build_meta'
 [project]
 name='aeroforge-agent'
-version='0.2.0'
-description='Offline-first multi-agent CFD workflow orchestrator'
+version='0.4.0'
+description='One-sentence CFD: natural language to OpenFOAM simulation and wind-tunnel visualization'
 readme='README.md'
 requires-python='>=3.10'
 dependencies=['pydantic>=2.0','numpy>=1.24','matplotlib>=3.7']
@@ -15,3 +15,5 @@ dev=['pytest>=7.4','pytest-asyncio>=0.21']
 aeroforge='aeroforge.cli:main'
 [tool.setuptools.packages.find]
 where=['src']
+[tool.setuptools.package-data]
+aeroforge=['tools/pv_templates/*.py']

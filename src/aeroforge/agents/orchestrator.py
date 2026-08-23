@@ -11,9 +11,9 @@ class OrchestratorAgent:
         self.workspace=workspace; self.agents={'requirements':RequirementParserAgent(),'geometry':GeometryHunterAgent(),'physics':PhysicsConfigAgent(),'mesh':MeshSmithAgent(),'simulation':SimulationPilotAgent(),'analysis':ResultAnalystAgent()}
     async def run(self,prompt,**kwargs):
         state={'input':prompt,'outputs':{}}
-        r=await self.agents['requirements'].run(prompt); state['outputs']['requirements']=r
+        r=await self.agents['requirements'].run(prompt,**kwargs); state['outputs']['requirements']=r
         g=await self.agents['geometry'].run(r,workspace=self.workspace); state['outputs']['geometry']=g
         c=await self.agents['physics'].run(r,g,workspace=self.workspace,**kwargs); state['outputs']['physics']=c
         m=await self.agents['mesh'].run(c,r,**kwargs); state['outputs']['mesh']=m
         s=await self.agents['simulation'].run(c,m,**kwargs); state['outputs']['simulation']=s
-        a=await self.agents['analysis'].run(s,r,g,m); state['outputs']['analysis']=a; state['status']='completed'; state['report']=a['report']; return state
+        a=await self.agents['analysis'].run(s,r,g,m,**kwargs); state['outputs']['analysis']=a; state['status']='completed'; state['report']=a['report']; return state

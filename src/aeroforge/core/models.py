@@ -28,6 +28,7 @@ class SimulationTask(BaseModel):
     object_name: str = "generic object"
     flow_type: FlowType = FlowType.EXTERNAL_AERODYNAMICS
     velocity: float = 1.0
+    yaw_angle_deg: float = 0.0  # 风向角（偏航）：入口速度矢量绕 z 轴旋转
     regime: Regime = Regime.STEADY
     fluid: FluidProperties = Field(default_factory=FluidProperties)
     geometry_source: GeometrySource = GeometrySource.SEARCH
@@ -45,3 +46,4 @@ class SimReport(BaseModel):
     case_dir: Path; converged: bool; final_residuals: dict[str, float] = Field(default_factory=dict); force_coeffs: Optional[ForceCoeffs] = None; flux_error_percent: float = 0.0; runtime_seconds: float = 0.0
 class FinalReport(BaseModel):
     task: SimulationTask; geometry: GeometryInfo; mesh: MeshReport; simulation: SimReport; visualization_paths: list[Path] = Field(default_factory=list); markdown_report_path: Path
+    visualization_note: str = ""  # 跳过/失败原因（诚实标注，不静默）

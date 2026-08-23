@@ -95,3 +95,22 @@ def test_transient_mode_dicts(tmp_path):
     assert "Euler" in schemes
     sol = (case / "system" / "fvSolution").read_text(encoding="utf-8")
     assert "PIMPLE" in sol and "nOuterCorrectors" in sol
+
+
+def test_yaw_rotates_inlet_and_drag_dir(tmp_path):
+    """风向角 30°：入口矢量/移动地面/阻力方向随风向旋转，升力方向不变。"""
+    case = build_case(tmp_path / "case", _spec(tmp_path, yaw_angle_deg=30.0))
+    u = (case / "0" / "U").read_text(encoding="utf-8")
+    assert "uniform (34.641 20 0)" in u          # 40·(cos30, sin30)
+    assert "movingWallVelocity" in u
+    ctrl = (case / "system" / "controlDict").read_text(encoding="utf-8")
+    assert "dragDir         (0.866025 0.5 0)" in ctrl
+    assert "liftDir         (0 0 1)" in ctrl
+
+
+def test_zero_yaw_keeps_canonical_vectors(tmp_path):
+    case = build_case(tmp_path / "case", _spec(tmp_path))
+    u = (case / "0" / "U").read_text(encoding="utf-8")
+    assert "uniform (40 0 0)" in u
+    ctrl = (case / "system" / "controlDict").read_text(encoding="utf-8")
+    assert "dragDir         (1 0 0)" in ctrl
