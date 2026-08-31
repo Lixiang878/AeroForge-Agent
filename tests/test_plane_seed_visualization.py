@@ -26,7 +26,16 @@ def test_hd_uses_one_incoming_yz_plane_and_small_fixed_direction_arrows():
     assert "UMAX = 1.08 * UFREE" not in text
     assert "velocity_colour_scale_mode" in text
     assert "UseLogScale" in text
-    assert "Cividis" in text
+    assert "#2166ac" in text and "#d73027" in text
+
+
+def test_paraview_templates_use_explicit_blue_to_red_speed_scale():
+    for template in (ANIMATION, HD):
+        text = template.read_text(encoding="utf-8")
+        assert "#2166ac" in text
+        assert "#d73027" in text
+        assert "Viridis" not in text
+        assert "Cividis" not in text
 
 
 def test_both_templates_describe_finite_near_body_plane_not_full_domain_inlet():

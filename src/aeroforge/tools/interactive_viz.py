@@ -28,7 +28,16 @@ _SPEED_LOG_RATIO = 8.0
 _PAPER_BG = "#f6f9fc"
 _PAPER_TEXT = "#16324a"
 _PAPER_GRID = "#c7d5e0"
-_VELOCITY_COLORSCALE = "Viridis"
+# A single blue-to-red scale is used for every displayed speed value.  The
+# pale midpoint keeps low/high-speed regions separable without using the
+# direction arrows or line density as a second, ambiguous encoding.
+_VELOCITY_COLORSCALE = [
+    [0.00, "#2166ac"],
+    [0.25, "#67a9cf"],
+    [0.50, "#ffffbf"],
+    [0.75, "#fdae61"],
+    [1.00, "#d73027"],
+]
 
 __all__ = [
     "build_interactive_figure",
@@ -350,6 +359,113 @@ def u_max_from_paths(paths) -> float:
     return max(values) if values else 1.0
 
 
+def _vehicle_focus_geometry(vertices: list[list[float]]) -> dict:
+    """Return a stable, vehicle-focused scene box and manual axis ratio.
+
+    ``aspectmode=data`` lets a long wake dominate the viewport.  The viewer is
+    intended to inspect the car and its near wake, so the ranges deliberately
+    keep a short downstream window while the full CFD data remain in the HTML.
+    The manual ratio is based on the body dimensions rather than the streamline
+    extents, which keeps the vehicle from looking like a flat cuboid.
+    """
+    xs = [float(point[0]) for point in vertices]
+    ys = [float(point[1]) for point in vertices]
+    zs = [float(point[2]) for point in vertices]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    zmin, zmax = min(zs), max(zs)
+    length = max(xmax - xmin, 1.0e-6)
+    width = max(ymax - ymin, 1.0e-6)
+    height = max(zmax - zmin, 1.0e-6)
+    # The x-axis is intentionally dominant, but y/z retain the body aspect
+    # ratio so mirrors, roof and rear separation remain legible.
+    aspectratio = {
+        "x": 2.70,
+        "y": max(0.92, min(1.48, 2.70 * width / length)),
+        "z": max(0.68, min(1.05, 2.70 * height / length)),
+    }
+    ranges = {
+        # Keep roughly one to one-and-a-half body lengths of downstream wake in
+        # the default frame; the exported data still retain the full wake for
+        # zooming and offline inspection.
+        "x": [xmin - 0.34 * length, xmax + 1.35 * length],
+        "y": [ymin - 0.95 * width, ymax + 0.95 * width],
+        "z": [zmin - 0.18 * height, zmax + 0.55 * height],
+    }
+    return {
+        "body_bounds": (xmin, xmax, ymin, ymax, zmin, zmax),
+        "length_m": length,
+        "width_m": width,
+        "height_m": height,
+        "aspectratio": aspectratio,
+        "ranges": ranges,
+    }
+
+
+def _body_detail_anchors(vertices: list[list[float]]) -> dict[str, list[float]]:
+    """Place inspection anchors at the mirrors and rear separation region."""
+    xmin, xmax, ymin, ymax, zmin, zmax = _vehicle_focus_geometry(vertices)["body_bounds"]
+    length = max(xmax - xmin, 1.0e-6)
+    width = max(ymax - ymin, 1.0e-6)
+    height = max(zmax - zmin, 1.0e-6)
+    return {
+        "left_mirror": [xmin + 0.22 * length, ymax - 0.06 * width, zmin + 0.56 * height],
+        "right_mirror": [xmin + 0.22 * length, ymin + 0.06 * width, zmin + 0.56 * height],
+        "tail": [xmax - 0.08 * length, 0.5 * (ymin + ymax), zmin + 0.50 * height],
+    }
+
+
+def _detail_streamline_trace(go, paths, anchor: list[float], speed_scale: dict,
+                             *, name: str, search_scale: list[float]):
+    """Highlight the CFD streamline nearest a local vehicle detail.
+
+    The highlight is still a sampled real-field ``Scatter3d`` line.  No marker
+    glyphs are added, so the detail view follows the paper convention of clean
+    continuous streamlines and arrowheads only.
+    """
+    best_path = None
+    best_index = 0
+    best_distance = math.inf
+    scales = [max(float(value), 1.0e-9) for value in search_scale]
+    for path in paths:
+        if not path:
+            continue
+        for index, sample in enumerate(path):
+            position = sample["position"]
+            distance = sum(
+                ((float(position[axis]) - float(anchor[axis])) / scales[axis]) ** 2
+                for axis in range(3)
+            )
+            if distance < best_distance:
+                best_distance = distance
+                best_path = path
+                best_index = index
+    if best_path is None:
+        return go.Scatter3d(x=[], y=[], z=[], mode="lines", name=name,
+                            showlegend=False, hoverinfo="skip")
+    half_window = max(4, min(14, len(best_path) // 5))
+    start = max(0, best_index - half_window)
+    stop = min(len(best_path), best_index + half_window + 1)
+    samples = best_path[start:stop]
+    positions = [sample["position"] for sample in samples]
+    speeds = [_speed(sample["velocity"]) for sample in samples]
+    return go.Scatter3d(
+        x=[position[0] for position in positions],
+        y=[position[1] for position in positions],
+        z=[position[2] for position in positions],
+        mode="lines",
+        line={
+            "color": [_speed_colour_value(speed, speed_scale) for speed in speeds],
+            "colorscale": _VELOCITY_COLORSCALE,
+            "cmin": speed_scale["cmin"], "cmax": speed_scale["cmax"],
+            "width": 5,
+        },
+        opacity=0.96, name=name, showlegend=False,
+        customdata=speeds,
+        hovertemplate=f"{name}｜|U| = %{{customdata:.2f}} m/s<extra></extra>",
+    )
+
+
 def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
                              frames: int = 120, fps: int = DEFAULT_ANIMATION_FPS):
     """Build a Plotly orbit viewer from an exported, real-field dataset."""
@@ -380,11 +496,11 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
         raise ValueError("u_max_mps must be finite and positive")
     speed_values = [_speed(sample["velocity"]) for path in paths for sample in path]
     speed_scale = speed_scale_config(speed_values, u_max)
-    bounds = (
-        min(xs), max(xs), min(ys), max(ys), min(zs), max(zs),
-    )
-    length = max(bounds[1] - bounds[0], 1.0e-6)
-    height = max(bounds[5] - bounds[4], 1.0e-6)
+    focus = _vehicle_focus_geometry(vertices)
+    bounds = focus["body_bounds"]
+    length = focus["length_m"]
+    width = focus["width_m"]
+    height = focus["height_m"]
     arrow_length = 0.08 * height
     body_trace = go.Mesh3d(
         x=xs, y=ys, z=zs, i=face_i, j=face_j, k=face_k,
@@ -410,6 +526,17 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
             customdata=path_speeds, hovertemplate="|U| = %{customdata:.2f} m/s<extra></extra>",
             showlegend=path_index == 0,
         ))
+    anchors = _body_detail_anchors(vertices)
+    detail_traces = [
+        _detail_streamline_trace(
+            go, paths, anchors["left_mirror"], speed_scale,
+            name="后视镜细节", search_scale=[0.35 * length, 0.45 * width, 0.35 * height],
+        ),
+        _detail_streamline_trace(
+            go, paths, anchors["tail"], speed_scale,
+            name="车尾分离区", search_scale=[0.28 * length, 0.65 * width, 0.50 * height],
+        ),
+    ]
     static_arrows, speed_anchor = _arrow_trace(
         go, paths, u_max, arrow_length, colorbar=True, scale=speed_scale)
     window = float(dataset.get("transport_window_s") or 1.0)
@@ -419,9 +546,9 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
     # one global clock, exactly as the ParaView animation.
     first_particles = _particle_trace(go, paths, 0.0, window, frames, arrow_length,
                                       float(dataset.get("u_free_mps") or 1.0), speed_scale)
-    particle_line_index = 1 + len(line_traces) + 2
+    particle_line_index = 1 + len(line_traces) + len(detail_traces) + 2
     particle_arrow_index = particle_line_index + 1
-    data = [body_trace, *line_traces, static_arrows, speed_anchor,
+    data = [body_trace, *line_traces, *detail_traces, static_arrows, speed_anchor,
             first_particles[0], first_particles[1]]
     frame_list = []
     transport_times = []
@@ -438,7 +565,11 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
             data=[particles[0], particles[1]],
             traces=[particle_line_index, particle_arrow_index],
         ))
-    camera = {"eye": {"x": 1.75, "y": -1.85, "z": 0.98}, "up": {"x": 0, "y": 0, "z": 1}}
+    camera = {
+        "eye": {"x": 1.45, "y": -1.55, "z": 0.72},
+        "center": {"x": 0.15, "y": 0.0, "z": 0.05},
+        "up": {"x": 0, "y": 0, "z": 1},
+    }
     frame_duration = max(1, round(1000 / fps))
     slider_steps = [
         {
@@ -464,10 +595,11 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
         showlegend=False,
         uirevision="aeroforge-steady-particles",
         scene={
-            "dragmode": "orbit", "aspectmode": "data", "camera": camera,
-            "xaxis": {"title": "x (m)", "range": [bounds[0] - 0.45 * length, bounds[1] + 1.20 * length], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6", "titlefont": {"color": _PAPER_TEXT}},
-            "yaxis": {"title": "y (m)", "range": [bounds[2] - 1.50 * (bounds[3] - bounds[2]), bounds[3] + 1.50 * (bounds[3] - bounds[2])], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6", "titlefont": {"color": _PAPER_TEXT}},
-            "zaxis": {"title": "z (m)", "range": [bounds[4] - 0.10 * height, bounds[5] + 0.80 * height], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6", "titlefont": {"color": _PAPER_TEXT}},
+            "dragmode": "orbit", "aspectmode": "manual",
+            "aspectratio": focus["aspectratio"], "camera": camera,
+            "xaxis": {"title": "x (m)", "range": focus["ranges"]["x"], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6", "titlefont": {"color": _PAPER_TEXT}},
+            "yaxis": {"title": "y (m)", "range": focus["ranges"]["y"], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6", "titlefont": {"color": _PAPER_TEXT}},
+            "zaxis": {"title": "z (m)", "range": focus["ranges"]["z"], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6", "titlefont": {"color": _PAPER_TEXT}},
             "bgcolor": _PAPER_BG,
         },
         updatemenus=[
@@ -491,11 +623,15 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
                 "showactive": False, "bgcolor": "#e1edf5", "font": {"color": _PAPER_TEXT},
                 "buttons": [
                     {"label": "前视", "method": "relayout", "args": [{"scene.camera": {
-                        "eye": {"x": -1.9, "y": -1.1, "z": 0.72}, "up": {"x": 0, "y": 0, "z": 1}}}]},
+                        "eye": {"x": -1.9, "y": -1.1, "z": 0.72}, "center": {"x": 0.0, "y": 0.0, "z": 0.05}, "up": {"x": 0, "y": 0, "z": 1}}}]},
                     {"label": "尾流", "method": "relayout", "args": [{"scene.camera": {
-                        "eye": {"x": 1.9, "y": -1.1, "z": 0.72}, "up": {"x": 0, "y": 0, "z": 1}}}]},
+                        "eye": {"x": 1.9, "y": -1.1, "z": 0.72}, "center": {"x": 0.28, "y": 0.0, "z": 0.06}, "up": {"x": 0, "y": 0, "z": 1}}}]},
                     {"label": "俯视", "method": "relayout", "args": [{"scene.camera": {
-                        "eye": {"x": 0.05, "y": -0.05, "z": 2.55}, "up": {"x": 0, "y": 1, "z": 0}}}]},
+                        "eye": {"x": 0.05, "y": -0.05, "z": 2.55}, "center": {"x": 0.15, "y": 0.0, "z": 0.0}, "up": {"x": 0, "y": 1, "z": 0}}}]},
+                    {"label": "后视镜", "method": "relayout", "args": [{"scene.camera": {
+                        "eye": {"x": -1.20, "y": -1.85, "z": 0.66}, "center": {"x": -0.30, "y": -0.18, "z": 0.08}, "up": {"x": 0, "y": 0, "z": 1}}}]},
+                    {"label": "车尾细节", "method": "relayout", "args": [{"scene.camera": {
+                        "eye": {"x": 1.35, "y": -1.45, "z": 0.66}, "center": {"x": 0.42, "y": 0.0, "z": 0.06}, "up": {"x": 0, "y": 0, "z": 1}}}]},
                 ],
             },
         ],
@@ -509,7 +645,8 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
             "xref": "paper", "yref": "paper", "x": 0.02, "y": 0.055,
             "showarrow": False, "font": {"size": 12, "color": _PAPER_TEXT},
         }],
-        meta={"speed_scale": speed_scale},
+        meta={"speed_scale": speed_scale, "vehicle_focus": focus,
+              "detail_regions": ["后视镜细节", "车尾分离区"]},
     )
     return figure
 
@@ -610,12 +747,14 @@ def render_interactive(case_dir: str | Path, u_free: float | None = None,
         "release_count_per_transport_cycle": _RELEASE_COUNT,
         "streamline_count": dataset.get("streamline_count"),
         "body_display_faces": (dataset.get("body") or {}).get("display_faces"),
-        "interaction": "Plotly scene.dragmode=orbit; mouse drag rotates, wheel zooms; preset front/wake/top cameras",
+        "vehicle_focus": figure.layout.meta.get("vehicle_focus"),
+        "detail_regions": figure.layout.meta.get("detail_regions"),
+        "interaction": "Plotly scene.dragmode=orbit; mouse drag rotates, wheel zooms; preset front/wake/top/mirror/rear-detail cameras",
         "interpretation": "self-contained browser view of a frozen steady RANS U(x) field; massless tracer playback, not transient turbulence or smoke",
     }
     paths["manifest"].write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    note = "交互式 HTML 已生成：含 |U| 色标、固定长度 U 箭头、鼠标轨道旋转/滚轮缩放和连续示踪粒子播放"
+    note = "交互式 HTML 已生成：含蓝红 |U| 色标、固定长度 U 箭头、车辆聚焦比例、后视镜/车尾细节机位和连续示踪粒子播放"
     return {
         "status": "completed", "interactive_paths": [paths["html"]],
         "data_path": paths["data"], "manifest_path": paths["manifest"],

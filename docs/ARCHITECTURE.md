@@ -49,7 +49,7 @@ ResultAnalyst       windtunnel_viz 调 pvpython 离屏渲染三机位烟线图�
   流线建议用 Tube 转不透明管（同时更接近风洞烟线质感）。
 - 诚实边界：无收敛场 / 无 pvpython → 状态 skipped + 原因写入报告，
   绝不回退到合成假图（v0.2.0 曾有此问题，v0.4.0 已移除）。
-- 结果模板使用有限透明近场采样面、感知均匀的 Viridis 连续色标（Cividis 回退）、稳定首帧相机和
+- 结果模板使用有限透明近场采样面、固定蓝—青—黄—红连续色标、稳定首帧相机和
   可配置统一车漆；速度跨度较大时切换带物理刻度的 `log10` 色标。色标与烟线来自
   真实 `U` 场，默认英雄图隐藏粗网格色块，采样面保留作诊断。
 - 动画按 `controlDict` 的实际 `application` 确定源场语义：`simpleFoam` 的
@@ -61,7 +61,7 @@ ResultAnalyst       windtunnel_viz 调 pvpython 离屏渲染三机位烟线图�
   无质量粒子不包含湍流脉动、扩散、浮力或烟雾物理，不能称作真实烟雾实验。
 - `interactive_viz.py` 调用 `export_streamline_data.py` 从 ParaView 获取实际 `U`、
   `IntegrationTime` 和有限近车身 YZ 播种面，车身仅做有界 VTK 抽稀以适配浏览器；
-  Plotly 使用轨道相机、输运时间滑块和物理速度色标（同样采用 Viridis/Cividis 回退与 log10 规则）。HTML 是冻结稳态 RANS 的
+  Plotly 使用车辆聚焦的手动纵横比、轨道相机、输运时间滑块和物理速度色标（蓝—青—黄—红与 log10 规则）。HTML 是冻结稳态 RANS 的
   无质量示踪展示，不与 P7 等未对齐视觉模型混用。
 
 ## 编排

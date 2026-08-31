@@ -77,6 +77,13 @@ aeroforge "车辆外流场 30 m/s" `
 风场叠加，也不能作为 P7 的计算结果。若要真正计算 P7，需先在建模工具中修复外壳、确认单位
 和轴向、通过 `surfaceCheck`/`checkMesh`，并用独立的 P7 case 重新求解。
 
+本轮另外从 `p7_visual_sanitized.glb` 生成了 E 盘独立的
+`workspace/external_models/xpeng_p7_candidate/p7_cfd_candidate.stl`。体素填充 +
+Marching Cubes 输出 162,936 面、1 个连通分量，导出后水密检查为真；其参数和哈希在
+同目录 `p7_cfd_candidate_manifest.json`。这是为了让用户可以继续使用 P7 的近似
+外壳候选，不是无损修复或厂商 CAD，清单仍为 `cfd_ready=false`，未与当前 DrivAerML
+风场绑定。在确认单位/轴向、外流场部件和 `surfaceCheck`/`checkMesh` 前，禁止直接求解。
+
 保留原 OBJ/MTL 便于追溯；在 E 盘另生成 `p7_visual_sanitized.glb` 作为可交互展示资产。
 该 GLB 排除了含非有限值的材质组，并嵌入 50 个材质、49 个纹理，但仍是非水密视觉派生文件，
 不应直接送入 `snappyHexMesh`。下载格式的取舍与后续 CFD 外壳要求见

@@ -56,6 +56,39 @@ def test_interactive_figure_has_orbit_drag_colorbar_and_animation_frames():
     assert figure.layout.scene.bgcolor == "#f6f9fc"
 
 
+def test_interactive_view_uses_vehicle_focused_ratio_and_detail_cameras():
+    pytest.importorskip("plotly")
+    from aeroforge.tools.interactive_viz import build_interactive_figure
+
+    figure = build_interactive_figure(_dataset(), frames=4, fps=10)
+
+    assert figure.layout.scene.aspectmode == "manual"
+    assert figure.layout.scene.aspectratio.x > figure.layout.scene.aspectratio.y
+    assert figure.layout.scene.aspectratio.y > figure.layout.scene.aspectratio.z
+    assert figure.layout.scene.camera.center.x == pytest.approx(0.15)
+    camera_labels = [
+        button.label
+        for button in figure.layout.updatemenus[1].buttons
+    ]
+    assert "后视镜" in camera_labels
+    assert "车尾细节" in camera_labels
+    detail_traces = [
+        trace for trace in figure.data
+        if trace.name in {"后视镜细节", "车尾分离区"}
+    ]
+    assert len(detail_traces) == 2
+    assert all(trace.type == "scatter3d" and trace.mode == "lines"
+               for trace in detail_traces)
+
+
+def test_velocity_colourscale_is_blue_to_red_for_speed():
+    from aeroforge.tools.interactive_viz import _VELOCITY_COLORSCALE
+
+    assert _VELOCITY_COLORSCALE[0][1].lower() in {"#2166ac", "#2c7bb6"}
+    assert _VELOCITY_COLORSCALE[-1][1].lower() in {"#d73027", "#b2182b"}
+    assert len(_VELOCITY_COLORSCALE) >= 5
+
+
 def test_interactive_module_keeps_all_output_on_case_volume(tmp_path):
     from aeroforge.tools.interactive_viz import interactive_output_paths
 

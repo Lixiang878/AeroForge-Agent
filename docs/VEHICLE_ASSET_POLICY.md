@@ -13,6 +13,10 @@
 提供本地模型和资产清单；缺少模型、许可证或 SHA-256 不一致时，在网格前停止，
 不得退化为简化方块车。
 
+补充检索了公开研究数据：官方 [DrivAerNet++ 仓库](https://github.com/roharon/drivaernet)
+提供大量参数化 STL 与 CFD 数据，但许可是 CC BY-NC 4.0，且不是大众/奥迪/宝马/小鹏等
+量产车型；它适合作为研究基准，不应被描述成品牌车替代品。
+
 ## 下载格式怎么选
 
 格式决定的是材质/场景封装方式，不决定网格是否能计算。当前建议按用途选择：
@@ -30,6 +34,12 @@
 `-X/+Z` 轴向、修复封闭后通过 `surfaceCheck`。不能把“能在网页里显示”当成“可用于
 snappyHexMesh”。
 
+为了继续使用 P7 进行后续几何实验，当前还保留了一个单独的
+`p7_cfd_candidate.stl`：它由视觉 GLB 经体素填充和 Marching Cubes 近似重建，已形成
+单一水密表面，但不等同原始车身 CAD，且单位/轴向与外流场部件仍未确认。该文件及
+`p7_cfd_candidate_manifest.json` 只作为待审候选，固定标记 `cfd_ready=false`，不能
+绕过工程门禁，也不能与 DrivAerML 风场混用。
+
 ## 已核对的代表性来源
 
 | 品牌/车型 | 代表性来源 | 当前处理结论 |
@@ -37,7 +47,7 @@ snappyHexMesh”。
 | 大众 ID.4 2021 | [CGTrader](https://www.cgtrader.com/3d-models/car/suv/volkswagen-id4-2021-e81351cd-55f6-4cfd-a3b0-088257ef8767) | 用户自行购买/下载；禁止把源模型放入公共仓库；未证明 CFD 水密。 |
 | 奥迪 A6 Sedan 2019 | [CGTrader](https://www.cgtrader.com/3d-models/car/luxury-car/audi-a6-sedan-2019) | 用户自行购买/下载；页面给出毫米单位，但仍需外壳清理和封闭修复。 |
 | 宝马 M4 Competition | [原 Sketchfab 页面](https://sketchfab.com/3d-models/bmw-m4-competition-m-package-5c0a2dafb1ad408d9fc9eeef9aee531b) | 2026-08-31 原页面返回 deleted 状态、模型 API 404；第三方 GitHub 署名不能代替已删除的上游核验。本轮未下载。 |
-| 小鹏 P7 2022 | [作者 Sketchfab 页面](https://sketchfab.com/3d-models/2022-xpeng-p7-e787dac0c6f84be7b39362fca9dc93da) / [模型 API](https://api.sketchfab.com/v3/models/e787dac0c6f84be7b39362fca9dc93da) | 用户已下载 ZIP 并在 E 盘留存任务副本；OBJ/MTL+54 纹理已审查，含 `-nan(ind)` 且非水密（165,713 条边界边），仍为视觉候选，不能直接 CFD。 |
+| 小鹏 P7 2022 | [作者 Sketchfab 页面](https://sketchfab.com/3d-models/2022-xpeng-p7-e787dac0c6f84be7b39362fca9dc93da) / [模型 API](https://api.sketchfab.com/v3/models/e787dac0c6f84be7b39362fca9dc93da) | 用户已下载 ZIP 并在 E 盘留存任务副本；原 OBJ/MTL+54 纹理含 `-nan(ind)` 且非水密（165,713 条边界边）。另有体素重建的 `p7_cfd_candidate.stl`（162,936 面、单连通、水密），但为近似候选，仍标记 `cfd_ready=false`，不能直接 CFD。 |
 | 理想 L9 | [CGTrader](https://www.cgtrader.com/3d-models/car/suv/li-l9) | 用户自行购买/下载；页面给出外形尺寸，但未声明水密且禁止源文件再分发。 |
 | 问界 M5 | [CGTrader](https://www.cgtrader.com/3d-models/car/car/aito-m5) | 用户自行购买/下载；渲染网格，不是经验证的工程 CAD。 |
 

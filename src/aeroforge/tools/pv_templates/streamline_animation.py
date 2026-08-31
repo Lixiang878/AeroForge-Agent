@@ -144,6 +144,32 @@ def velocity_colour_scale_mode(sampled_u_min, colour_u_max):
     return "log10" if lower > 0.0 and upper / lower >= ratio_threshold else "linear"
 
 
+def set_blue_red_speed_lut(lut, lower, upper, mode):
+    """Apply a fixed blue--cyan--yellow--red scientific speed scale."""
+    lower = float(lower)
+    upper = float(upper)
+    if (not math.isfinite(lower) or not math.isfinite(upper)
+            or lower < 0.0 or upper <= lower
+            or (mode == "log10" and lower <= 0.0)):
+        raise ValueError("blue-red speed limits must be finite and ordered")
+    positions = [
+        lower,
+        lower * (upper / lower) ** 0.25 if mode == "log10" else lower + 0.25 * (upper - lower),
+        lower * (upper / lower) ** 0.50 if mode == "log10" else lower + 0.50 * (upper - lower),
+        lower * (upper / lower) ** 0.75 if mode == "log10" else lower + 0.75 * (upper - lower),
+        upper,
+    ]
+    # #2166ac -> #67a9cf -> #ffffbf -> #fdae61 -> #d73027
+    colours = [(0.129, 0.400, 0.675), (0.404, 0.663, 0.812),
+               (1.000, 1.000, 0.749), (0.992, 0.682, 0.380),
+               (0.843, 0.188, 0.153)]
+    points = []
+    for position, colour in zip(positions, colours):
+        points.extend([position, *colour])
+    lut.RGBPoints = points
+    lut.RescaleTransferFunction(lower, upper)
+
+
 def fetched_streamline_velocity_range(tracers):
     """Return the finite positive and maximum |U| values from StreamTracer."""
     minimum = None
@@ -313,24 +339,7 @@ u_max = dynamic_velocity_colour_max(sampled_u_max)
 colour_scale_mode = velocity_colour_scale_mode(sampled_u_min, u_max)
 colour_scale_min = sampled_u_min
 lut = GetColorTransferFunction("U")
-colour_preset_applied = False
-for preset in ("Viridis (matplotlib)", "Viridis", "Cividis", "Cividis (matplotlib)"):
-    try:
-        lut.ApplyPreset(preset, False)
-        colour_preset_applied = True
-        break
-    except Exception:
-        continue
-if not colour_preset_applied:
-    midpoint = (math.sqrt(colour_scale_min * u_max)
-                if colour_scale_mode == "log10"
-                else 0.5 * (colour_scale_min + u_max))
-    lut.RGBPoints = [
-        colour_scale_min, 0.000, 0.135, 0.304,
-        midpoint, 0.126, 0.553, 0.553,
-        u_max, 0.993, 0.906, 0.144,
-    ]
-lut.RescaleTransferFunction(colour_scale_min, u_max)
+set_blue_red_speed_lut(lut, colour_scale_min, u_max, colour_scale_mode)
 setp(lut, ("UseLogScale", "use_log_scale"), int(colour_scale_mode == "log10"))
 setp(lut, ("AutomaticRescaleRangeMode",), "Never")
 for display in stream_displays:
@@ -794,7 +803,7 @@ metadata = {
     "colour_scale_min_mps": float(colour_scale_min),
     "colour_scale_max_mps": float(u_max),
     "colour_scale_title": bar.Title,
-    "colour_preset": "Viridis with Cividis fallback",
+    "colour_preset": "blue-cyan-yellow-red (#2166ac to #d73027)",
     "colour_scale_source": (
         "observed StreamTracer/particle |U| samples with 8% headroom; "
         "u_free is used only for transport timing"

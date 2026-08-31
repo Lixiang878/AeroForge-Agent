@@ -48,7 +48,7 @@ def test_animation_uses_one_incoming_yz_seed_plane_and_direction_glyphs():
     assert "arrow_neutral_colour" in text
     assert "fixed length" in text
     assert "UseLogScale" in text
-    assert "Cividis" in text
+    assert "#2166ac" in text and "#d73027" in text
     assert "f6f9fc" in text
 
 

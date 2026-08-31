@@ -116,6 +116,37 @@ def velocity_colour_scale_mode(sampled_u_min, colour_u_max):
     return "log10" if lower > 0.0 and upper / lower >= 8.0 else "linear"
 
 
+def set_blue_red_speed_lut(lut, lower, upper, mode):
+    """Apply a fixed blue--cyan--yellow--red scientific speed scale.
+
+    The explicit RGB points avoid host-specific preset names and preserve the
+    same meaning in screenshots, animations, and the Plotly viewer.  Endpoint
+    colours are ``#2166ac`` (low) and ``#d73027`` (high).
+    """
+    lower = float(lower)
+    upper = float(upper)
+    if (not math.isfinite(lower) or not math.isfinite(upper)
+            or lower < 0.0 or upper <= lower
+            or (mode == "log10" and lower <= 0.0)):
+        raise ValueError("blue-red speed limits must be finite and ordered")
+    positions = [
+        lower,
+        lower * (upper / lower) ** 0.25 if mode == "log10" else lower + 0.25 * (upper - lower),
+        lower * (upper / lower) ** 0.50 if mode == "log10" else lower + 0.50 * (upper - lower),
+        lower * (upper / lower) ** 0.75 if mode == "log10" else lower + 0.75 * (upper - lower),
+        upper,
+    ]
+    # #2166ac -> #67a9cf -> #ffffbf -> #fdae61 -> #d73027
+    colours = [(0.129, 0.400, 0.675), (0.404, 0.663, 0.812),
+               (1.000, 1.000, 0.749), (0.992, 0.682, 0.380),
+               (0.843, 0.188, 0.153)]
+    points = []
+    for position, colour in zip(positions, colours):
+        points.extend([position, *colour])
+    lut.RGBPoints = points
+    lut.RescaleTransferFunction(lower, upper)
+
+
 def fetched_streamline_velocity_range(tracers):
     """Fetch actual StreamTracer U arrays and return their finite speed range."""
     if not tracers:
@@ -337,26 +368,9 @@ arrow_display = Show(seed_arrows, view)
 arrow_neutral_colour(arrow_display)
 setp(arrow_display, ("Opacity", "opacity"), 0.95)
 
-# One perceptually ordered colour scale for every field-bearing object.
+# One explicit blue-to-red scale for every field-bearing object.
 lut = GetColorTransferFunction("U")
-preset_applied = False
-for preset in ("Viridis (matplotlib)", "Viridis", "Cividis", "Cividis (matplotlib)"):
-    try:
-        lut.ApplyPreset(preset, False)
-        preset_applied = True
-        break
-    except Exception:
-        continue
-if not preset_applied:
-    midpoint = (math.sqrt(COLOUR_MIN * UMAX)
-                if COLOUR_MODE == "log10"
-                else 0.50 * (COLOUR_MIN + UMAX))
-    lut.RGBPoints = [
-        COLOUR_MIN, 0.000, 0.135, 0.304,
-        midpoint, 0.126, 0.553, 0.553,
-        UMAX, 0.993, 0.906, 0.144,
-    ]
-lut.RescaleTransferFunction(COLOUR_MIN, UMAX)
+set_blue_red_speed_lut(lut, COLOUR_MIN, UMAX, COLOUR_MODE)
 setp(lut, ("UseLogScale", "use_log_scale"), int(COLOUR_MODE == "log10"))
 setp(lut, ("AutomaticRescaleRangeMode",), "Never")
 for display in stream_displays:
@@ -449,6 +463,7 @@ with open(os.path.join(case, "results", "static_velocity_metadata.json"), "w", e
         "sampled_u_min_mps": sampled_u_min, "sampled_u_max_mps": sampled_u_max,
         "colour_scale_min_mps": COLOUR_MIN, "colour_scale_max_mps": UMAX,
         "colour_scale_mode": COLOUR_MODE, "colour_scale_title": bar.Title,
+        "colour_preset": "blue-cyan-yellow-red (#2166ac to #d73027)",
         "colour_scale_source": "full-resolution streamline U samples plus 8% headroom",
         "seed_plane": seed_window,
     }, handle, indent=2)

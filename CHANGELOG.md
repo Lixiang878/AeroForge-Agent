@@ -4,7 +4,7 @@
 
 ### Visualization and vehicle asset refinement
 - Re-rendered the DrivAerML showcase with a light paper-style composition,
-  Viridis colouring (Cividis fallback), a data-driven physical speed range with
+  explicit blue-cyan-yellow-red colouring (`#2166ac` to `#d73027`), a data-driven physical speed range with
   8% headroom, and automatic log10 scaling only when the sampled `|U|` span is
   wide. Scalar bars are larger, framed, and labelled in m/s; direction arrows
   remain fixed-length and neutral.
