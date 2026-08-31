@@ -82,6 +82,42 @@ def test_interactive_view_uses_vehicle_focused_ratio_and_detail_cameras():
     assert figure.layout.meta["wake_diagnostics"]["status"] == "balanced"
 
 
+def test_interactive_view_exposes_field_grounded_visualization_modes():
+    pytest.importorskip("plotly")
+    from aeroforge.tools.interactive_viz import build_interactive_figure
+
+    figure = build_interactive_figure(_dataset(), frames=4, fps=10)
+
+    labels = [button.label for button in figure.layout.updatemenus[2].buttons]
+    assert labels == ["连续流线", "速度点云", "尾流截面", "组合"]
+    assert figure.layout.meta["visualization_modes"] == [
+        "streamlines", "speed_cloud", "wake_slice", "combined",
+    ]
+    assert any(trace.name == "速度采样点云" for trace in figure.data)
+    assert any(trace.name == "尾流截面速度" for trace in figure.data)
+    cloud = next(trace for trace in figure.data if trace.name == "速度采样点云")
+    assert cloud.marker.symbol == "square"
+    assert all(len(button.args[0]["visible"]) == len(figure.data)
+               for button in figure.layout.updatemenus[2].buttons)
+    assert not next(trace for trace in figure.data if trace.name == "速度采样点云").visible
+    assert not next(trace for trace in figure.data if trace.name == "尾流截面速度").visible
+
+
+def test_interactive_metadata_labels_steady_transport_semantics():
+    pytest.importorskip("plotly")
+    from aeroforge.tools.interactive_viz import build_interactive_figure
+
+    dataset = _dataset()
+    dataset["transport_length_factor"] = 8.0
+    figure = build_interactive_figure(dataset, frames=4, fps=10)
+
+    assert figure.layout.meta["transport_window_s"] == pytest.approx(0.8)
+    assert figure.layout.meta["transport_length_factor"] == pytest.approx(8.0)
+    assert figure.layout.meta["transport_time_semantics"] == (
+        "steady U(x) tracer transport; not transient solver time"
+    )
+
+
 def test_velocity_colourscale_is_blue_to_red_for_speed():
     from aeroforge.tools.interactive_viz import _VELOCITY_COLORSCALE
 
@@ -106,6 +142,16 @@ def test_exporter_merges_stl_points_before_browser_decimation():
                 / "src/aeroforge/tools/pv_templates/export_streamline_data.py")
     assert "vtkCleanPolyData" in exporter.read_text(encoding="utf-8")
     assert "Merge coincident points" in exporter.read_text(encoding="utf-8")
+
+
+def test_exporter_extends_steady_transport_window_to_the_full_eight_length_wake():
+    from pathlib import Path
+
+    exporter = (Path(__file__).resolve().parents[1]
+                / "src/aeroforge/tools/pv_templates/export_streamline_data.py")
+    text = exporter.read_text(encoding="utf-8")
+    assert "STEADY_TRANSPORT_LENGTHS = 8.0" in text
+    assert "transport_length_factor" in text
 
 
 def test_speed_scale_uses_physical_log_ticks_for_wide_dynamic_range():

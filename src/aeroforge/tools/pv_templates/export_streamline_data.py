@@ -29,6 +29,8 @@ from paraview.simple import (
     StreamTracerWithCustomSource,
 )
 
+STEADY_TRANSPORT_LENGTHS = 8.0
+
 
 def setp(obj, keys, value):
     for key in keys:
@@ -253,7 +255,7 @@ if not positive_speed_values:
     raise SystemExit("StreamTracer returned no positive U samples")
 u_max = max(speed_values)
 u_min = min(positive_speed_values)
-transport_window = 4.0 * length / max(u_free, 1.0e-12)
+transport_window = STEADY_TRANSPORT_LENGTHS * length / max(u_free, 1.0e-12)
 payload = {
     "schema_version": 1,
     "case": case,
@@ -270,6 +272,7 @@ payload = {
     "sampled_u_min_mps": float(u_min),
     "sampled_u_max_mps": float(u_max),
     "transport_window_s": float(transport_window),
+    "transport_length_factor": STEADY_TRANSPORT_LENGTHS,
     "seed_plane": seed_window,
     "streamline_count": len(paths),
     "streamline_sample_limit": 140,

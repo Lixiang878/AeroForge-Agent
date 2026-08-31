@@ -30,6 +30,53 @@ TUM 的 [DrivAer geometry/download 页面](https://www.epc.ed.tum.de/en/aer/rese
 约 18.4% 三角形质量低于 0.05；这提示 snappyHexMesh 可能耗时较高，不能
 替代体网格质量和网格无关性审计。完整来源与证据在同目录的 `SOURCE.md`。
 
+## 第二个车型几何试验：DrivAerML `run_2`
+
+为避免展示长期绑定同一个外形，本轮又从同一公开研究数据源选择了一个不同的
+DrivAerML 几何变体。它不是大众/奥迪/宝马或国产品牌的量产 CAD，但比参数化方块
+更适合做可追溯的车辆外流场基准。数据集卡支持按 `run_N/drivaer_N.stl` 单文件下载，
+没有把整套 TB 级数据拉到本地；来源为
+[DrivAerML 数据集卡](https://huggingface.co/datasets/neashton/drivaerml)。
+
+```text
+本地文件：workspace/external_models/drivaerml_run_2/run_2/drivaer_2.stl
+文件大小：142,346,440 bytes
+SHA-256：1c911495893a27bc248921f679082515b6e2828290c0df810563ecf979076b68
+质量门禁：cfd_ready=true；376,537 vertices；753,246 faces；1 component；watertight=true
+包围盒尺寸：4.72823 × 2.14718 × 1.384199 m（x × y × z）
+```
+
+![DrivAerML run_2 geometry preview](img/drivaerml_run_2_geometry.png)
+
+这张预览只证明几何导入和外观，不是 run_2 的 CFD 结果；当前真实速度场仍绑定
+`run_1`/refined case，禁止把旧场线叠到 `run_2` 车身上。若要计算第二车型，应使用
+独立工作目录和独立网格/求解/收敛记录，例如：
+
+```powershell
+python examples/run_drivaerml.py `
+  workspace/external_models/drivaerml_run_2/run_2/drivaer_2.stl `
+  --workspace workspace/drivaerml_run_2 --profile showcase --iterations 800
+```
+
+该命令会按文件名把报告标为 `DrivAerML run 2`；在获得新的非零时刻 `U` 场前，
+不能称为 run_2 风洞结果。run_2 的下载、哈希和验证摘要另存于该工作目录的
+`SOURCE.md` 与 `asset_manifest.json`，所有文件均位于 E 盘项目工作区。
+
+本轮已实际完成一套独立的 showcase 复算（不是网格无关性研究）：
+
+```text
+case：workspace/drivaerml_run_2/task_5e31083c/case/
+网格：191,628 cells；checkMesh=True
+求解：simpleFoam，800 次；收敛门禁通过
+最终残差：Ux 1.38e-4，Uy 9.63e-4，Uz 4.01e-4，p 1.10e-4
+气动量：Cd=0.25186，Cl=-0.03051（30 m/s，当前网格/壁面预设）
+```
+
+三机位高清图、120 帧/40 fps 示踪动画和可拖动四模式 HTML 已分别输出到该 case
+的 `results/`，并以 `drivaerml_run_2_*` 名称复制到仓库 `docs/img/` 与 `docs/media/`。
+动画仍是冻结稳态 `U(x)` 的无质量粒子输运；它不是瞬态湍流，也不替代三套网格、
+`y+` 和统计收敛审查。
+
 ## 下载与运行
 
 如果本地没有模型，可用 Hugging Face CLI 下载原文件：

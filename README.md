@@ -27,6 +27,20 @@ aeroforge "做一辆 宝马X3 的迎风仿真，风速 120 km/h，风向角 0 �
 |---|---|---|
 | ![front](docs/img/streamline_hd_front.png) | ![side](docs/img/streamline_hd_side.png) | ![wake](docs/img/streamline_hd_wake.png) |
 
+第二个可切换的研究车型几何（仅 STL 导入预览，尚未与旧场混用）：
+
+![DrivAerML run_2 geometry](docs/img/drivaerml_run_2_geometry.png)
+
+run_2 独立 800 次 showcase 的三机位真实 `U` 场（与 run_1 的场严格分开）：
+
+| run_2 前侧 | run_2 正侧 | run_2 尾流 |
+|---|---|---|
+| ![run2 front](docs/img/drivaerml_run_2_front.png) | ![run2 side](docs/img/drivaerml_run_2_side.png) | ![run2 wake](docs/img/drivaerml_run_2_wake.png) |
+
+[run_2 GIF](docs/media/drivaerml_run_2_steady_particles.gif) ·
+[run_2 MP4](docs/media/drivaerml_run_2_steady_particles.mp4) ·
+[run_2 可拖动 HTML](docs/media/drivaerml_run_2_steady_particles.html)
+
 ![DrivAerML 稳态 CFD 真实速度场示踪粒子输运](docs/media/drivaerml_steady_particles.gif)
 
 [下载 GIF](docs/media/drivaerml_steady_particles.gif) ·
@@ -47,8 +61,10 @@ aeroforge "做一辆 宝马X3 的迎风仿真，风速 120 km/h，风向角 0 �
 截面而不是只画三条线；方向箭头显式由 `U` 定向、长度固定，颜色和色标只表示
 速度模长 `|U|`，不使用球形节点，也不把箭头密度当作烟雾浓度。HTML 视图提供
 `|U| (m/s)` 色标、播放/时间滑块、前视/尾流/俯视/后视镜/车尾细节预设，并支持鼠标轨道旋转和滚轮缩放；
+交互页还可在“连续流线 / 速度点云 / 尾流截面 / 组合”四种由真实 `U` 采样构成的视图之间切换；
 交互场景使用车体尺寸驱动的手动纵横比，避免长尾流把车辆压扁；
-动画默认 120 帧、40 fps（约 3 s），帧间输运时间仍按真实 `IntegrationTime` 插值。
+动画默认 120 帧、40 fps（约 3 s）；稳态示踪输运窗按 `8L/U∞` 计算（相较原先 `4L/U∞` 加长，
+当前 run_1 约 1.2 s），帧间仍按真实 `IntegrationTime` 插值，不能解释为瞬态求解时间。
 收敛求解完成后自动生成并嵌入 Markdown 报告；
 无收敛场或未安装 ParaView 时如实跳过并在报告说明原因。
 
@@ -92,6 +108,10 @@ RequirementParser → GeometryHunter → PhysicsConfig → MeshSmith → Simulat
 - Mesh quality is gated by `checkMesh`; failed mesh → no solver run.
 - Visualization renders the **actual converged field** via pvpython
   (ParaView). No fake synthetic plots — those were removed in v0.4.0.
+- The self-contained Plotly viewer offers four field-grounded modes: continuous
+  streamlines, square speed samples, a downstream wake section, and a combined view.
+  Steady tracer playback spans `8L/U∞`; it is a display clock for a frozen `U(x)` field,
+  not transient solver time.
 
 ### Quick start
 

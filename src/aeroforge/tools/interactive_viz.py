@@ -474,6 +474,114 @@ def _detail_streamline_trace(go, paths, anchor: list[float], speed_scale: dict,
     )
 
 
+def _speed_cloud_trace(go, paths, speed_scale: dict, *, max_points: int = 6000):
+    """Show sampled field points as an optional, explicitly labelled cloud.
+
+    The points are a deterministic decimation of the exported streamline
+    samples.  This mode is hidden by default so the clean streamline figure
+    remains the primary paper-style view; selecting it makes the sampling
+    density and the local speed variation visible without inventing a volume
+    interpolation.
+    """
+    total = sum(len(path) for path in paths)
+    stride = max(1, math.ceil(total / max(int(max_points), 1)))
+    positions = []
+    speeds = []
+    seen = 0
+    for path in paths:
+        for sample in path:
+            if seen % stride == 0:
+                positions.append(sample["position"])
+                speeds.append(_speed(sample["velocity"]))
+            seen += 1
+    colour_values = [_speed_colour_value(speed, speed_scale) for speed in speeds]
+    return go.Scatter3d(
+        x=[position[0] for position in positions],
+        y=[position[1] for position in positions],
+        z=[position[2] for position in positions],
+        mode="markers", visible=False, name="速度采样点云",
+        marker={
+            "size": 2.8, "opacity": 0.62, "color": colour_values,
+            "colorscale": _VELOCITY_COLORSCALE,
+            "cmin": speed_scale["cmin"], "cmax": speed_scale["cmax"],
+            # Use square samples for the optional diagnostic cloud.  The
+            # primary streamline view remains marker-free; square glyphs also
+            # avoid the bead-like appearance the user rejected for arrows.
+            "symbol": "square",
+        },
+        customdata=speeds,
+        hovertemplate="采样点｜|U| = %{customdata:.2f} m/s<extra></extra>",
+        showlegend=False,
+    )
+
+
+def _wake_slice_samples(paths, *, xmax: float, length: float):
+    """Select one real streamline sample per path near a downstream x plane."""
+    target_x = float(xmax) + 0.75 * float(length)
+    tolerance = max(0.30 * float(length), 1.0e-9)
+    positions = []
+    speeds = []
+    for path in paths:
+        if not path:
+            continue
+        sample = min(path, key=lambda item: abs(float(item["position"][0]) - target_x))
+        if abs(float(sample["position"][0]) - target_x) <= tolerance:
+            positions.append(sample["position"])
+            speeds.append(_speed(sample["velocity"]))
+    return positions, speeds, target_x, tolerance
+
+
+def _wake_slice_trace(go, paths, speed_scale: dict, *, xmax: float, length: float):
+    """Show a downstream cross-section using only samples crossing that plane."""
+    positions, speeds, target_x, tolerance = _wake_slice_samples(
+        paths, xmax=xmax, length=length)
+    colour_values = [_speed_colour_value(speed, speed_scale) for speed in speeds]
+    trace = go.Scatter3d(
+        x=[position[0] for position in positions],
+        y=[position[1] for position in positions],
+        z=[position[2] for position in positions],
+        mode="markers", visible=False, name="尾流截面速度",
+        marker={
+            "size": 7, "opacity": 0.88, "color": colour_values,
+            "colorscale": _VELOCITY_COLORSCALE,
+            "cmin": speed_scale["cmin"], "cmax": speed_scale["cmax"],
+            "symbol": "square",
+        },
+        customdata=speeds,
+        hovertemplate="尾流截面 x≈%{x:.2f} m｜|U| = %{customdata:.2f} m/s<extra></extra>",
+        showlegend=False,
+    )
+    return trace, {
+        "x_m": target_x,
+        "tolerance_m": tolerance,
+        "sample_count": len(positions),
+        "source": "nearest exported streamline sample per path",
+    }
+
+
+def _visualization_mode_visibility(*, data_count: int, body_index: int,
+                                   line_indices: list[int], detail_indices: list[int],
+                                   cloud_index: int, slice_index: int,
+                                   arrow_index: int, anchor_index: int,
+                                   particle_line_index: int,
+                                   particle_arrow_index: int, mode: str) -> list[bool]:
+    """Build an explicit trace visibility mask for the mode selector."""
+    if mode not in {"streamlines", "speed_cloud", "wake_slice", "combined"}:
+        raise ValueError(f"unsupported visualization mode: {mode}")
+    visible = [False] * data_count
+    visible[body_index] = True
+    visible[anchor_index] = True  # physical colourbar anchor
+    if mode in {"streamlines", "combined"}:
+        for index in (*line_indices, *detail_indices, arrow_index,
+                      particle_line_index, particle_arrow_index):
+            visible[index] = True
+    if mode in {"speed_cloud", "combined"}:
+        visible[cloud_index] = True
+    if mode in {"wake_slice", "combined"}:
+        visible[slice_index] = True
+    return visible
+
+
 def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
                              frames: int = 120, fps: int = DEFAULT_ANIMATION_FPS):
     """Build a Plotly orbit viewer from an exported, real-field dataset."""
@@ -549,19 +657,39 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
             name="车尾分离区", search_scale=[0.28 * length, 0.65 * width, 0.50 * height],
         ),
     ]
+    speed_cloud = _speed_cloud_trace(go, paths, speed_scale)
+    wake_slice, wake_slice_meta = _wake_slice_trace(
+        go, paths, speed_scale, xmax=bounds[1], length=length)
     static_arrows, speed_anchor = _arrow_trace(
         go, paths, u_max, arrow_length, colorbar=True, scale=speed_scale)
     window = float(dataset.get("transport_window_s") or 1.0)
     if not math.isfinite(window) or window <= 0:
         raise ValueError("transport_window_s must be finite and positive")
+    transport_factor = dataset.get("transport_length_factor")
+    if transport_factor is not None:
+        try:
+            transport_factor = float(transport_factor)
+        except (TypeError, ValueError):
+            transport_factor = None
+    transport_time_semantics = (
+        "steady U(x) tracer transport; not transient solver time"
+    )
     # Start with the first physical transport sample; frames then advance on
     # one global clock, exactly as the ParaView animation.
     first_particles = _particle_trace(go, paths, 0.0, window, frames, arrow_length,
                                       float(dataset.get("u_free_mps") or 1.0), speed_scale)
-    particle_line_index = 1 + len(line_traces) + len(detail_traces) + 2
-    particle_arrow_index = particle_line_index + 1
     data = [body_trace, *line_traces, *detail_traces, static_arrows, speed_anchor,
-            first_particles[0], first_particles[1]]
+            speed_cloud, wake_slice, first_particles[0], first_particles[1]]
+    body_index = 0
+    line_indices = list(range(1, 1 + len(line_traces)))
+    detail_start = 1 + len(line_traces)
+    detail_indices = list(range(detail_start, detail_start + len(detail_traces)))
+    arrow_index = detail_start + len(detail_traces)
+    anchor_index = arrow_index + 1
+    cloud_index = anchor_index + 1
+    slice_index = cloud_index + 1
+    particle_line_index = slice_index + 1
+    particle_arrow_index = particle_line_index + 1
     frame_list = []
     transport_times = []
     for frame_index in range(frames):
@@ -646,6 +774,61 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
                         "eye": {"x": 1.35, "y": -1.45, "z": 0.66}, "center": {"x": 0.42, "y": 0.0, "z": 0.06}, "up": {"x": 0, "y": 0, "z": 1}}}]},
                 ],
             },
+            {
+                "type": "buttons", "direction": "right", "x": 0.52, "y": 0.99,
+                "showactive": True, "bgcolor": "#e1edf5",
+                "font": {"color": _PAPER_TEXT},
+                "buttons": [
+                    {
+                        "label": "连续流线", "method": "update",
+                        "args": [{"visible": _visualization_mode_visibility(
+                            data_count=len(data), body_index=body_index,
+                            line_indices=line_indices, detail_indices=detail_indices,
+                            cloud_index=cloud_index, slice_index=slice_index,
+                            arrow_index=arrow_index, anchor_index=anchor_index,
+                            particle_line_index=particle_line_index,
+                            particle_arrow_index=particle_arrow_index,
+                            mode="streamlines")},
+                                 {"title": {"text": "数值风洞｜连续流线 / U(x)"}}],
+                    },
+                    {
+                        "label": "速度点云", "method": "update",
+                        "args": [{"visible": _visualization_mode_visibility(
+                            data_count=len(data), body_index=body_index,
+                            line_indices=line_indices, detail_indices=detail_indices,
+                            cloud_index=cloud_index, slice_index=slice_index,
+                            arrow_index=arrow_index, anchor_index=anchor_index,
+                            particle_line_index=particle_line_index,
+                            particle_arrow_index=particle_arrow_index,
+                            mode="speed_cloud")},
+                                 {"title": {"text": "数值风洞｜速度采样点云"}}],
+                    },
+                    {
+                        "label": "尾流截面", "method": "update",
+                        "args": [{"visible": _visualization_mode_visibility(
+                            data_count=len(data), body_index=body_index,
+                            line_indices=line_indices, detail_indices=detail_indices,
+                            cloud_index=cloud_index, slice_index=slice_index,
+                            arrow_index=arrow_index, anchor_index=anchor_index,
+                            particle_line_index=particle_line_index,
+                            particle_arrow_index=particle_arrow_index,
+                            mode="wake_slice")},
+                                 {"title": {"text": "数值风洞｜尾流速度截面"}}],
+                    },
+                    {
+                        "label": "组合", "method": "update",
+                        "args": [{"visible": _visualization_mode_visibility(
+                            data_count=len(data), body_index=body_index,
+                            line_indices=line_indices, detail_indices=detail_indices,
+                            cloud_index=cloud_index, slice_index=slice_index,
+                            arrow_index=arrow_index, anchor_index=anchor_index,
+                            particle_line_index=particle_line_index,
+                            particle_arrow_index=particle_arrow_index,
+                            mode="combined")},
+                                 {"title": {"text": "数值风洞｜组合视图"}}],
+                    },
+                ],
+            },
         ],
         sliders=[{
             "active": 0, "x": 0.02, "y": 0.02, "len": 0.72,
@@ -653,12 +836,26 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
             "pad": {"t": 0, "b": 0}, "steps": slider_steps,
         }],
         annotations=[{
-            "text": f"{speed_scale['note']}。拖动鼠标旋转，滚轮缩放。",
+            "text": (
+                f"{speed_scale['note']}。"
+                + (f"输运窗 {window:.2f} s = {transport_factor:g}L/U∞（冻结稳态示踪）。"
+                   if transport_factor is not None
+                   else f"输运窗 {window:.2f} s（冻结稳态示踪）。")
+                + "拖动鼠标旋转，滚轮缩放。"
+            ),
             "xref": "paper", "yref": "paper", "x": 0.02, "y": 0.055,
             "showarrow": False, "font": {"size": 12, "color": _PAPER_TEXT},
         }],
         meta={"speed_scale": speed_scale, "vehicle_focus": focus,
+              "transport_window_s": window,
+              "transport_length_factor": transport_factor,
+              "transport_time_semantics": transport_time_semantics,
               "detail_regions": ["后视镜细节", "车尾分离区"],
+              "visualization_modes": [
+                  "streamlines", "speed_cloud", "wake_slice", "combined",
+              ],
+              "visualization_mode_labels": ["连续流线", "速度点云", "尾流截面", "组合"],
+              "wake_slice": wake_slice_meta,
               "wake_diagnostics": wake_diagnostics},
     )
     return figure
@@ -760,12 +957,17 @@ def render_interactive(case_dir: str | Path, u_free: float | None = None,
         "frames": int(frames),
         "fps": int(fps),
         "transport_window_s": dataset.get("transport_window_s"),
+        "transport_length_factor": dataset.get("transport_length_factor"),
+        "transport_time_semantics": figure.layout.meta.get("transport_time_semantics"),
         "speed_scale": speed_scale,
         "release_count_per_transport_cycle": _RELEASE_COUNT,
         "streamline_count": dataset.get("streamline_count"),
         "body_display_faces": (dataset.get("body") or {}).get("display_faces"),
         "vehicle_focus": figure.layout.meta.get("vehicle_focus"),
         "detail_regions": figure.layout.meta.get("detail_regions"),
+        "visualization_modes": figure.layout.meta.get("visualization_modes"),
+        "visualization_mode_labels": figure.layout.meta.get("visualization_mode_labels"),
+        "wake_slice": figure.layout.meta.get("wake_slice"),
         "wake_diagnostics": wake_diagnostics,
         "interaction": "Plotly scene.dragmode=orbit; mouse drag rotates, wheel zooms; preset front/wake/top/mirror/rear-detail cameras",
         "interpretation": "self-contained browser view of a frozen steady RANS U(x) field; massless tracer playback, not transient turbulence or smoke",

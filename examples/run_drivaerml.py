@@ -11,6 +11,7 @@ Usage:
 """
 import argparse
 import asyncio
+import re
 import sys
 from pathlib import Path
 
@@ -48,6 +49,15 @@ def _default_iterations(profile: str) -> int:
     return 800 if profile == "showcase" else 160
 
 
+def _geometry_source_label(stl: Path) -> str:
+    """Keep the report label tied to the selected DrivAerML run asset."""
+    match = re.search(r"(?:^|[_-])(?:run|drivaer)[_-]?(\d+)(?:$|[_-])",
+                      stl.stem, flags=re.IGNORECASE)
+    if match:
+        return f"DrivAerML run {int(match.group(1))} (CC BY-SA 4.0)"
+    return "DrivAerML STL (CC BY-SA 4.0; run not encoded in filename)"
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description="DrivAerML STL CFD run")
     parser.add_argument("stl", type=Path, help="closed DrivAerML STL")
@@ -71,7 +81,7 @@ async def main() -> int:
         f"车辆外流场 {args.velocity:g} m/s",
         upload_stl_path=args.stl,
         upload_ground_clearance=0.005,
-        geometry_source_label="DrivAerML run 1 (CC BY-SA 4.0)",
+        geometry_source_label=_geometry_source_label(args.stl),
         n_iterations=iterations,
         **settings,
     )

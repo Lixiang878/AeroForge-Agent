@@ -500,6 +500,23 @@ def test_drivaerml_example_exposes_explicit_smoke_and_showcase_profiles():
     assert module._default_iterations("showcase") == 800
 
 
+def test_drivaerml_example_labels_the_selected_dataset_run():
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "examples" / "run_drivaerml.py"
+    spec = importlib.util.spec_from_file_location("run_drivaerml_example_labels", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    assert module._geometry_source_label(Path("drivaer_2.stl")) == (
+        "DrivAerML run 2 (CC BY-SA 4.0)"
+    )
+    assert module._geometry_source_label(Path("vehicle.stl")) == (
+        "DrivAerML STL (CC BY-SA 4.0; run not encoded in filename)"
+    )
+
+
 def test_streamline_template_explicitly_uses_velocity_vector():
     template = (
         Path(__file__).resolve().parents[1]

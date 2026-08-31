@@ -62,6 +62,7 @@ def _pure_helpers():
         "validate_streamline_sample",
         "interpolate_sample",
         "steady_particle_release_interval",
+        "steady_particle_transport_window",
         "stable_particle_arrow",
         "dynamic_velocity_colour_max",
         "velocity_colour_scale_mode",
@@ -152,6 +153,13 @@ def test_release_interval_is_independent_of_render_frame_count():
     interval = helpers["steady_particle_release_interval"]
     assert interval(0.8, 8) == pytest.approx(0.8 / 64.0)
     assert interval(0.8, 80) == pytest.approx(0.8 / 64.0)
+
+
+def test_steady_particle_transport_window_covers_eight_body_lengths():
+    helpers = _pure_helpers()
+    window = helpers["steady_particle_transport_window"]
+    assert window(4.5, 30.0) == pytest.approx(8.0 * 4.5 / 30.0)
+    assert window(4.5, 30.0, 4.0) == pytest.approx(4.0 * 4.5 / 30.0)
 
 
 def test_release_cadence_is_dense_enough_for_smooth_playback():

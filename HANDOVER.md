@@ -3,7 +3,23 @@
 > 写给接手的 AI / 工程师：本文档交代**已做工作、当前真实状态、已知坑、未完成事项**，
 > 并列出**需要复核的疑点**与验证方法。请带着审查眼光阅读——前任（我）的方案
 > 可能有误，欢迎推翻。
-> 最后更新：2026-08-31（尾流偏侧诊断、DrivAerNet++ 官方源门禁、P7 视觉/CFD 分离）。
+> 最后更新：2026-08-31（多形态交互可视化、8L/U∞ 示踪窗、DrivAerML run_2 独立复算）。
+
+## 0.8. 当前交付：多形态视图与 DrivAerML run_2（2026-08-31）
+
+- `interactive_viz.py` 的自包含 Plotly 页面现在提供 `连续流线`、`速度点云`、`尾流截面`、
+  `组合` 四种模式。连续流线/箭头是默认论文式视图；点云与截面只是对真实 `U` 采样的
+  可选诊断层，点云使用方形块，不再用球形节点。
+- 稳态粒子输运周期统一为 `8L/U∞`，清单区分该展示时间与 simpleFoam 迭代时间；当前
+  refined run_1 为 1.2543 s，run_2 为 1.2609 s，均 120 帧/40 fps。
+- 新下载的 `workspace/external_models/drivaerml_run_2/run_2/drivaer_2.stl` 通过原生 STL
+  门禁（1 component、watertight、753246 faces）。run_2 独立 case 在
+  `workspace/drivaerml_run_2/task_5e31083c/case/`，191628 cells、800 次 simpleFoam、
+  `checkMesh=True`、`Cd=0.25186`、`Cl=-0.03051`；这仍是 showcase 结果，不是网格无关性
+  工程结论。
+- run_2 的静帧、GIF/MP4、可拖动 HTML 已复制到 `docs/img/` 和 `docs/media/`，而源 STL/帧/
+  JSON 等大文件仍留在 E 盘 `workspace/`（`.gitignore` 排除）。每次 ParaView 调用的
+  `TEMP/TMP` 都显式指向 E 盘 scratch，完成后清理。
 
 ## 0.7. 尾流诊断与 DrivAerNet++ 接入（2026-08-31）
 

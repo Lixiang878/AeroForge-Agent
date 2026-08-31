@@ -498,6 +498,18 @@ def steady_particle_release_interval(transport_window_s, frame_count=None):
     return value
 
 
+def steady_particle_transport_window(length, u_free, length_factor=8.0):
+    """Return the massless-tracer window for a finite near-wake distance."""
+    body_length = float(length)
+    reference_speed = float(u_free)
+    factor = float(length_factor)
+    if (not math.isfinite(body_length) or body_length <= 0.0
+            or not math.isfinite(reference_speed) or reference_speed <= 0.0
+            or not math.isfinite(factor) or factor <= 0.0):
+        raise ValueError("transport length, free-stream speed, and factor must be positive")
+    return factor * body_length / reference_speed
+
+
 def stable_particle_arrow(path_index, release_index, stride=4):
     """Select arrowheads by stable path/release identity, never point order."""
     path_value = int(path_index)
@@ -565,6 +577,7 @@ particle_glyph_display = None
 particle_glyph_coloured = False
 particle_cycle_duration = None
 particle_transport_window = None
+particle_transport_length_factor = None
 particle_release_interval = None
 particle_pre_release_duration = None
 particle_observed_u_min = None
@@ -575,7 +588,9 @@ if mode == "steady_particles":
         raise SystemExit("steady_particles requires StreamTracer IntegrationTime data")
     # All paths share one physical clock.  Each path is displayed only while
     # its own actual IntegrationTime range contains the particle age.
-    particle_transport_window = 4.0 * length / builtins.max(u_free, 1.0e-12)
+    particle_transport_length_factor = 8.0
+    particle_transport_window = steady_particle_transport_window(
+        length, u_free, particle_transport_length_factor)
     particle_cycle_duration = particle_transport_window
     particle_positive_speeds = [
         velocity_magnitude(sample[2])
@@ -754,6 +769,10 @@ metadata = {
     ),
     "particle_cycle_duration_s": (
         float(particle_cycle_duration) if mode == "steady_particles" else None
+    ),
+    "transport_length_factor": (
+        float(particle_transport_length_factor)
+        if mode == "steady_particles" else None
     ),
     "release_interval_s": (
         float(particle_release_interval)
