@@ -43,12 +43,20 @@ def _profile_settings(profile: str) -> dict:
     raise ValueError(f"unknown DrivAerML profile: {profile}")
 
 
+def _default_iterations(profile: str) -> int:
+    """Keep smoke cheap while giving the showcase wake enough steady iterations."""
+    return 800 if profile == "showcase" else 160
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description="DrivAerML STL CFD run")
     parser.add_argument("stl", type=Path, help="closed DrivAerML STL")
     parser.add_argument("--workspace", type=Path, default=Path("workspace/drivaerml"))
     parser.add_argument("--velocity", type=float, default=30.0)
-    parser.add_argument("--iterations", type=int, default=160)
+    parser.add_argument(
+        "--iterations", type=int, default=None,
+        help="稳态迭代数；未指定时 smoke=160，showcase=800",
+    )
     parser.add_argument(
         "--profile", choices=("smoke", "showcase"), default="smoke",
         help="smoke=快速导入验证；showcase=尾流加密并生成三机位图（仍非生产网格）",
@@ -58,12 +66,13 @@ async def main() -> int:
         parser.error(f"STL not found: {args.stl}")
 
     settings = _profile_settings(args.profile)
+    iterations = args.iterations if args.iterations is not None else _default_iterations(args.profile)
     state = await OrchestratorAgent(args.workspace).run(
         f"车辆外流场 {args.velocity:g} m/s",
         upload_stl_path=args.stl,
         upload_ground_clearance=0.005,
         geometry_source_label="DrivAerML run 1 (CC BY-SA 4.0)",
-        n_iterations=args.iterations,
+        n_iterations=iterations,
         **settings,
     )
     report = state["report"]

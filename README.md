@@ -59,6 +59,11 @@ aeroforge "做一辆 宝马X3 的迎风仿真，风速 120 km/h，风向角 0 �
 [`docs/VEHICLE_ASSET_POLICY.md`](docs/VEHICLE_ASSET_POLICY.md)；品牌车型缺少
 经授权文件或清单时流程会停止，不会退化成方块车。
 
+DrivAerNet++ 的官方仓库、设计 ID 选择和原生 STL 质量门禁见
+[`docs/DRIVAERNETPP_SOURCE.md`](docs/DRIVAERNETPP_SOURCE.md)。GitHub 只作代码和元数据
+来源；数据集 STL 需按设计 ID 选择性下载到 E 盘并通过水密/连通性检查，流程不自动下载
+整套数据，也不把参数化研究车冒称为品牌车型。
+
 [English](#english) · [中文](#中文)
 
 ---
@@ -96,7 +101,7 @@ pytest -q                                    # offline unit tests (no OpenFOAM n
 
 python examples/demo_bmw_x3.py x3.stl x3.manifest.json  # licensed model + manifest
 python examples/run_drivaerml.py body.stl    # public DrivAerML smoke run
-python examples/run_drivaerml.py body.stl --profile showcase --iterations 260  # wake-render demo
+python examples/run_drivaerml.py body.stl --profile showcase --iterations 800  # converged-wake render demo
 python examples/paraview/streamline_hd.py <case_dir>   # re-render any solved case
 python examples/verify_ahmed.py              # end-to-end validation vs experiment
 aeroforge "vehicle CFD 30 m/s" --upload-stl body.stl --model-manifest model.json --animation
@@ -154,7 +159,7 @@ pytest -q                                    # 离线单元测试（无需 OpenF
 
 python examples/demo_bmw_x3.py x3.stl x3.manifest.json  # 授权模型 + 资产清单
 python examples/run_drivaerml.py body.stl    # 公开 DrivAerML 真实几何冒烟
-python examples/run_drivaerml.py body.stl --profile showcase --iterations 260  # 尾流展示图
+python examples/run_drivaerml.py body.stl --profile showcase --iterations 800  # 尾流展示图（延长稳态迭代）
 python examples/paraview/streamline_hd.py <case_dir>   # 对已求解算例重新渲染
 python examples/verify_ahmed.py              # 端到端基准验证
 aeroforge "车辆外流场 30 m/s" --upload-stl body.stl --model-manifest model.json --animation

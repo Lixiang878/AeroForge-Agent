@@ -21,7 +21,7 @@ def _dataset():
         "streamlines": [[
             {"time": 0.0, "position": [-1.2, 0.0, 0.4], "velocity": [2.0, 0.0, 0.0]},
             {"time": 0.4, "position": [-0.2, 0.0, 0.4], "velocity": [2.2, 0.0, 0.0]},
-            {"time": 0.8, "position": [0.8, 0.0, 0.4], "velocity": [1.8, 0.0, 0.0]},
+            {"time": 0.8, "position": [3.0, 0.0, 0.4], "velocity": [1.8, 0.0, 0.0]},
         ]],
         "u_max_mps": 2.4,
         "transport_window_s": 0.8,
@@ -79,6 +79,7 @@ def test_interactive_view_uses_vehicle_focused_ratio_and_detail_cameras():
     assert len(detail_traces) == 2
     assert all(trace.type == "scatter3d" and trace.mode == "lines"
                for trace in detail_traces)
+    assert figure.layout.meta["wake_diagnostics"]["status"] == "balanced"
 
 
 def test_velocity_colourscale_is_blue_to_red_for_speed():
@@ -134,6 +135,14 @@ def test_small_physical_speeds_do_not_get_a_one_metre_per_second_floor():
     config = speed_scale_config([0.02, 0.03, 0.05])
     assert config["vmin_mps"] == 0.02
     assert config["vmax_mps"] == pytest.approx(0.054)
+
+
+def test_interactive_manifest_contract_includes_wake_diagnostic_gate(tmp_path):
+    from aeroforge.tools.interactive_viz import _wake_diagnostic_manifest
+
+    result = _wake_diagnostic_manifest(_dataset(), downstream_x=0.5)
+    assert result["status"] == "balanced"
+    assert result["source_field_time"] is None
 
 
 def test_interactive_streamlines_and_moving_trails_use_local_speed_colours():

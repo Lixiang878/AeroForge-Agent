@@ -3,7 +3,25 @@
 > 写给接手的 AI / 工程师：本文档交代**已做工作、当前真实状态、已知坑、未完成事项**，
 > 并列出**需要复核的疑点**与验证方法。请带着审查眼光阅读——前任（我）的方案
 > 可能有误，欢迎推翻。
-> 最后更新：2026-08-31（真实 DrivAerML STL 导入、蓝红色标、交互比例与 P7 候选修复）。
+> 最后更新：2026-08-31（尾流偏侧诊断、DrivAerNet++ 官方源门禁、P7 视觉/CFD 分离）。
+
+## 0.7. 尾流诊断与 DrivAerNet++ 接入（2026-08-31）
+
+- 旧的 `task_28d67b31/case` 260 步场经真实 `streamline_data.json` 审计：入口
+  `Uy` 均值 `-1.4636 m/s`，下游中心偏移 `0.896` 个车宽，不能解释成相机偏移或
+  可视化 bug。复制出的 `task_28d67b31_refined/case` 延长到 800 次，最新场为 780，
+  入口 `Uy` 均值约 `0.0308 m/s`，下游中心偏移 `0.0104` 个车宽；仍需后续力系数/网格
+  收敛研究，不把它宣称为工程收敛。WSL/OpenFOAM 12 本轮没有生成新的 `forceCoeffs`。
+- `tools/wake_diagnostics.py` 以入口横向均值/RMS、下游流线中心和端点中心为指标，
+  输出 `balanced`、`inlet_crossflow_detected`、`lateral_bias_detected` 或样本不足状态；
+  交互 HTML 与 manifest 均记录该诊断，禁止镜像/平移真实流线来“修图”。
+- `tools/drivaernet_adapter.py` 只检查官方仓库元数据、按设计 ID 查找本地原生 STL，并
+  对有限性、三角面、单连通和水密性执行门禁；没有 bulk download，也不从 P7 OBJ/GLB
+  或体素壳体推断 CFD 外壳。官方浅克隆在 `workspace/external_models/drivaernet_official_upstream/`，
+  详情见 [`docs/DRIVAERNETPP_SOURCE.md`](docs/DRIVAERNETPP_SOURCE.md)。
+- `examples/run_drivaerml.py --profile showcase` 未显式给 `--iterations` 时现在默认 800，
+  `smoke` 仍为 160；文档示例已同步。Windows Anaconda 的 trimesh/Plotly 可选导入增加
+  WMI 缓存保护，避免首次导入卡住。
 
 ## 0.6. 2026-08-31 当前媒体与色标收尾
 

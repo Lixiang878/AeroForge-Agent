@@ -496,6 +496,8 @@ def test_drivaerml_example_exposes_explicit_smoke_and_showcase_profiles():
     assert showcase["wake_refinement"] is True
     assert showcase["nose_refinement"] is False
     assert showcase["render"] is True
+    assert module._default_iterations("smoke") == 160
+    assert module._default_iterations("showcase") == 800
 
 
 def test_streamline_template_explicitly_uses_velocity_vector():

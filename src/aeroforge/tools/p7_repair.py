@@ -26,7 +26,8 @@ def _sha256(path: Path) -> str:
 
 def _finite_mesh(source: Path):
     try:
-        import trimesh
+        from .mesh_compat import import_trimesh
+        trimesh = import_trimesh()
         import numpy as np
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise RuntimeError("P7 repair requires the optional trimesh dependency") from exc
@@ -93,7 +94,8 @@ def repair_p7_surface(source_path: str | Path, destination_stl: str | Path,
     if destination.suffix.lower() != ".stl":
         raise ValueError("destination must use the .stl extension")
 
-    import trimesh
+    from .mesh_compat import import_trimesh
+    trimesh = import_trimesh()
 
     source_mesh = _finite_mesh(source)
     voxel_grid = source_mesh.voxelized(float(pitch))

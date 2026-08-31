@@ -13,9 +13,12 @@
 提供本地模型和资产清单；缺少模型、许可证或 SHA-256 不一致时，在网格前停止，
 不得退化为简化方块车。
 
-补充检索了公开研究数据：官方 [DrivAerNet++ 仓库](https://github.com/roharon/drivaernet)
+补充检索了公开研究数据：官方 [DrivAerNet++ 仓库](https://github.com/Mohamedelrefaie/DrivAerNet)
 提供大量参数化 STL 与 CFD 数据，但许可是 CC BY-NC 4.0，且不是大众/奥迪/宝马/小鹏等
 量产车型；它适合作为研究基准，不应被描述成品牌车替代品。
+官方仓库的本地浅克隆、设计 ID 发现和原生 STL 质量门禁见
+[`DRIVAERNETPP_SOURCE.md`](DRIVAERNETPP_SOURCE.md)。完整数据不随 GitHub 克隆下载，
+只选择必要的设计子集并放在 E 盘。
 
 ## 下载格式怎么选
 

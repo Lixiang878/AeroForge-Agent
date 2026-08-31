@@ -4,7 +4,8 @@ import pytest
 
 
 def test_p7_repair_builds_watertight_candidate_and_auditable_manifest(tmp_path):
-    trimesh = pytest.importorskip("trimesh")
+    from aeroforge.tools.mesh_compat import import_trimesh
+    trimesh = import_trimesh()
     from aeroforge.tools.p7_repair import repair_p7_surface
 
     source = tmp_path / "open_box.glb"

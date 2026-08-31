@@ -21,6 +21,8 @@ from .windtunnel_viz import (
     parse_vehicle_color,
     read_freestream,
 )
+from .mesh_compat import prime_windows_platform_cache
+from .wake_diagnostics import wake_bias_metrics
 
 _EXPORT_TEMPLATE = Path(__file__).parent / "pv_templates" / "export_streamline_data.py"
 _RELEASE_COUNT = 64
@@ -153,6 +155,12 @@ def speed_scale_config(speeds, upper: float | None = None) -> dict:
 def _speed_colour_value(speed: float, scale: dict) -> float:
     value = max(float(speed), float(scale["vmin_mps"]))
     return math.log10(value) if scale["mode"] == "log10" else value
+
+
+def _wake_diagnostic_manifest(dataset: dict, *, u_free: float | None = None,
+                              downstream_x: float | None = None) -> dict:
+    """Expose the field audit used by both the figure metadata and manifest."""
+    return wake_bias_metrics(dataset, u_free=u_free, downstream_x=downstream_x)
 
 
 def _stable_particle_arrow(path_index: int, release_index: int, stride: int = 4) -> bool:
@@ -472,6 +480,7 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
     if frames < 2 or fps <= 0:
         raise ValueError("frames must be >= 2 and fps must be positive")
     try:
+        prime_windows_platform_cache()
         import plotly.graph_objects as go
     except ImportError as exc:  # pragma: no cover - exercised by deployment env
         raise RuntimeError("interactive viewer requires optional dependency plotly") from exc
@@ -496,6 +505,9 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
         raise ValueError("u_max_mps must be finite and positive")
     speed_values = [_speed(sample["velocity"]) for path in paths for sample in path]
     speed_scale = speed_scale_config(speed_values, u_max)
+    wake_diagnostics = _wake_diagnostic_manifest(
+        dataset, u_free=dataset.get("u_free_mps"),
+    )
     focus = _vehicle_focus_geometry(vertices)
     bounds = focus["body_bounds"]
     length = focus["length_m"]
@@ -646,7 +658,8 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
             "showarrow": False, "font": {"size": 12, "color": _PAPER_TEXT},
         }],
         meta={"speed_scale": speed_scale, "vehicle_focus": focus,
-              "detail_regions": ["后视镜细节", "车尾分离区"]},
+              "detail_regions": ["后视镜细节", "车尾分离区"],
+              "wake_diagnostics": wake_diagnostics},
     )
     return figure
 
@@ -686,6 +699,7 @@ def render_interactive(case_dir: str | Path, u_free: float | None = None,
         return {"status": "skipped", "interactive_paths": [],
                 "note": "未找到 pvpython，交互式真实场导出跳过"}
     try:
+        prime_windows_platform_cache()
         import plotly  # noqa: F401
     except ImportError:
         return {"status": "skipped", "interactive_paths": [],
@@ -721,6 +735,9 @@ def render_interactive(case_dir: str | Path, u_free: float | None = None,
                         for sample in path]
         speed_scale = speed_scale_config(
             speed_values, float(dataset.get("u_max_mps") or u_max_from_paths(dataset["streamlines"])))
+        wake_diagnostics = _wake_diagnostic_manifest(
+            dataset, u_free=float(dataset.get("u_free_mps") or u_free),
+        )
         _write_html(figure, paths["html"])
     except (OSError, ValueError, TypeError, RuntimeError, json.JSONDecodeError) as exc:
         return {"status": "failed", "interactive_paths": [],
@@ -749,6 +766,7 @@ def render_interactive(case_dir: str | Path, u_free: float | None = None,
         "body_display_faces": (dataset.get("body") or {}).get("display_faces"),
         "vehicle_focus": figure.layout.meta.get("vehicle_focus"),
         "detail_regions": figure.layout.meta.get("detail_regions"),
+        "wake_diagnostics": wake_diagnostics,
         "interaction": "Plotly scene.dragmode=orbit; mouse drag rotates, wheel zooms; preset front/wake/top/mirror/rear-detail cameras",
         "interpretation": "self-contained browser view of a frozen steady RANS U(x) field; massless tracer playback, not transient turbulence or smoke",
     }
