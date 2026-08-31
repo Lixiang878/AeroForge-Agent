@@ -80,6 +80,8 @@ DrivAerNet++ 的官方仓库、设计 ID 选择和原生 STL 质量门禁见
 [`docs/DRIVAERNETPP_SOURCE.md`](docs/DRIVAERNETPP_SOURCE.md)。GitHub 只作代码和元数据
 来源；数据集 STL 需按设计 ID 选择性下载到 E 盘并通过水密/连通性检查，流程不自动下载
 整套数据，也不把参数化研究车冒称为品牌车型。
+工作区保留项、历史审计证据和可再生缓存的边界见
+[`docs/WORKSPACE_LAYOUT.md`](docs/WORKSPACE_LAYOUT.md)。
 
 [English](#english) · [中文](#中文)
 
