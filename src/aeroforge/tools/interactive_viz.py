@@ -373,8 +373,10 @@ def _vehicle_focus_geometry(vertices: list[list[float]]) -> dict:
     ``aspectmode=data`` lets a long wake dominate the viewport.  The viewer is
     intended to inspect the car and its near wake, so the ranges deliberately
     keep a short downstream window while the full CFD data remain in the HTML.
-    The manual ratio is based on the body dimensions rather than the streamline
-    extents, which keeps the vehicle from looking like a flat cuboid.
+    The manual ratio is derived from those displayed ranges, not from body
+    dimensions alone.  This keeps one metre in x, y, and z at the same visual
+    scale; using the body-only ratio would make the car appear artificially tall
+    because the wake window is much longer than the body height.
     """
     xs = [float(point[0]) for point in vertices]
     ys = [float(point[1]) for point in vertices]
@@ -385,13 +387,6 @@ def _vehicle_focus_geometry(vertices: list[list[float]]) -> dict:
     length = max(xmax - xmin, 1.0e-6)
     width = max(ymax - ymin, 1.0e-6)
     height = max(zmax - zmin, 1.0e-6)
-    # The x-axis is intentionally dominant, but y/z retain the body aspect
-    # ratio so mirrors, roof and rear separation remain legible.
-    aspectratio = {
-        "x": 2.70,
-        "y": max(0.92, min(1.48, 2.70 * width / length)),
-        "z": max(0.68, min(1.05, 2.70 * height / length)),
-    }
     ranges = {
         # Keep roughly one to one-and-a-half body lengths of downstream wake in
         # the default frame; the exported data still retain the full wake for
@@ -400,11 +395,23 @@ def _vehicle_focus_geometry(vertices: list[list[float]]) -> dict:
         "y": [ymin - 0.95 * width, ymax + 0.95 * width],
         "z": [zmin - 0.18 * height, zmax + 0.55 * height],
     }
+    # Plotly's manual aspectratio is a ratio of the *displayed scene spans*,
+    # not a metres-per-axis declaration.  Scale it from the actual ranges so
+    # that aspectratio[axis] / range_span[axis] is identical for x/y/z.
+    # This is the root-cause fix for the previous 1.55x vertical stretch.
+    axis_spans = {
+        axis: float(ranges[axis][1] - ranges[axis][0]) for axis in "xyz"
+    }
+    max_span = max(axis_spans.values())
+    aspectratio = {
+        axis: 2.70 * axis_spans[axis] / max_span for axis in "xyz"
+    }
     return {
         "body_bounds": (xmin, xmax, ymin, ymax, zmin, zmax),
         "length_m": length,
         "width_m": width,
         "height_m": height,
+        "axis_spans": axis_spans,
         "aspectratio": aspectratio,
         "ranges": ranges,
     }

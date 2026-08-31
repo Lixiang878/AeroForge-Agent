@@ -65,6 +65,17 @@ def test_interactive_view_uses_vehicle_focused_ratio_and_detail_cameras():
     assert figure.layout.scene.aspectmode == "manual"
     assert figure.layout.scene.aspectratio.x > figure.layout.scene.aspectratio.y
     assert figure.layout.scene.aspectratio.y > figure.layout.scene.aspectratio.z
+    spans = {
+        axis: figure.layout.scene[axis + "axis"].range[1]
+        - figure.layout.scene[axis + "axis"].range[0]
+        for axis in "xyz"
+    }
+    unit_scales = {
+        axis: figure.layout.scene.aspectratio[axis] / spans[axis]
+        for axis in "xyz"
+    }
+    assert unit_scales["x"] == pytest.approx(unit_scales["y"])
+    assert unit_scales["y"] == pytest.approx(unit_scales["z"])
     assert figure.layout.scene.camera.center.x == pytest.approx(0.15)
     camera_labels = [
         button.label
