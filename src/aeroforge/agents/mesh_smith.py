@@ -20,7 +20,11 @@ class MeshSmithAgent:
             return {'status':'failed','runtime_backend':bridge.info.backend,
                     'mesh':MeshReport(mesh_path=case,passed_checkmesh=False),
                     'notes':[f"网格序列在 {seq['stage']} 失败，日志: {seq['logs'][-1] if seq['logs'] else 'N/A'}"]}
-        run_checkmesh(case,bridge)
+        check = run_checkmesh(case, bridge)
+        if check.get('dry_run') or check.get('returncode') != 0:
+            return {'status':'failed','runtime_backend':bridge.info.backend,
+                    'mesh':MeshReport(mesh_path=case,passed_checkmesh=False),
+                    'notes':['checkMesh 命令执行失败（见 log.checkMesh），结果不可信，终止求解']}
         stats=parse_mesh_stats(case)
         report=MeshReport(mesh_path=case,cell_count=stats['cell_count'],
                           max_non_orthogonality=stats['max_non_orthogonality'],
@@ -29,5 +33,8 @@ class MeshSmithAgent:
         if not report.passed_checkmesh:
             return {'status':'failed','runtime_backend':bridge.info.backend,'mesh':report,
                     'notes':['checkMesh 未通过（见 log.checkMesh），结果不可信，终止求解']}
+        if report.cell_count <= 0:
+            return {'status':'failed','runtime_backend':bridge.info.backend,'mesh':report,
+                    'notes':['checkMesh 日志缺少有效单元数，结果不可信，终止求解']}
         return {'status':'completed','runtime_backend':bridge.info.backend,'mesh':report,'notes':[]}
 MeshSmith=MeshSmithAgent

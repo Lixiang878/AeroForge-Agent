@@ -72,6 +72,36 @@ class CaseSpec:
     layer_expansion: float = 1.2               # 边界层膨胀比
     n_parallel: int | None = None              # 并行核数；设置时生成 decomposeParDict
 
+    def __post_init__(self) -> None:
+        if (not math.isfinite(self.velocity) or not math.isfinite(self.density)
+                or not math.isfinite(self.nu)
+                or self.velocity <= 0 or self.density <= 0 or self.nu <= 0):
+            raise ValueError("velocity, density and nu must be positive")
+        if not math.isfinite(self.yaw_angle_deg):
+            raise ValueError("yaw_angle_deg must be finite")
+        if not (0 <= self.turbulence_intensity < 1):
+            raise ValueError("turbulence_intensity must be in [0, 1)")
+        if (not math.isfinite(self.turbulence_viscosity_ratio)
+                or self.turbulence_viscosity_ratio <= 0
+                or not math.isfinite(self.max_co) or self.max_co <= 0):
+            raise ValueError("turbulence_viscosity_ratio and max_co must be positive")
+        if self.solver_mode not in {"steady", "transient"}:
+            raise ValueError("solver_mode must be 'steady' or 'transient'")
+        for name, value in (("end_time", self.end_time), ("delta_t", self.delta_t)):
+            if value is not None and (not math.isfinite(value) or value <= 0):
+                raise ValueError(f"{name} must be positive when provided")
+        if self.n_iterations <= 0 or self.base_cells_per_L <= 0:
+            raise ValueError("iteration and background-cell counts must be positive")
+        if self.base_cell_size is not None and (not math.isfinite(self.base_cell_size) or self.base_cell_size <= 0):
+            raise ValueError("base_cell_size must be positive when provided")
+        if self.first_layer_yplus <= 0 or self.n_wall_layers <= 0 or self.layer_expansion <= 0:
+            raise ValueError("wall-layer settings must be positive")
+        if (len(self.margins) != 4
+                or any(not math.isfinite(value) or value < 0 for value in self.margins)):
+            raise ValueError("margins must contain four finite non-negative values")
+        if self.wall_treatment not in {"lowRe", "wallFunction"}:
+            raise ValueError("wall_treatment must be 'lowRe' or 'wallFunction'")
+
     @property
     def characteristic_length(self) -> float:
         b = self.bbox
@@ -96,9 +126,27 @@ def domain_from_bbox(bbox: BoundingBox, margins: tuple[float, float, float, floa
     return {
         "x_min": bbox.x_min - up * L, "x_max": bbox.x_max + down * L,
         "y_min": bbox.y_min - side * W, "y_max": bbox.y_max + side * W,
-        "z_min": 0.0, "z_max": max(bbox.z_max * top, H * top),
+        # 顶部外扩相对物体上表面计算；不能用绝对 z_max * top，
+        # 否则带有平移坐标的 STL 会得到错误的域高。
+        "z_min": 0.0, "z_max": bbox.z_max + top * H,
         "L": L, "W": W, "H": H,
     }
+
+
+def _is_yawed(spec: CaseSpec) -> bool:
+    """是否需要允许侧向来流穿过远场边界。"""
+    return abs(float(getattr(spec, "yaw_angle_deg", 0.0) or 0.0)) > 1e-9
+
+
+def _reference_area(spec: CaseSpec) -> float:
+    """按包围盒估计偏航后的投影迎风面积（俯视投影宽度 × 高度）。"""
+    b = spec.bbox
+    if b is None:
+        raise ValueError("spec.bbox is required")
+    yaw = math.radians(float(getattr(spec, "yaw_angle_deg", 0.0) or 0.0))
+    projected_width = (abs(math.cos(yaw)) * (b.y_max - b.y_min)
+                       + abs(math.sin(yaw)) * (b.x_max - b.x_min))
+    return projected_width * (b.z_max - b.z_min)
 
 
 def build_case(case_dir: str | Path, spec: CaseSpec) -> Path:
@@ -115,11 +163,11 @@ def build_case(case_dir: str | Path, spec: CaseSpec) -> Path:
     shutil.copy2(spec.stl_path, case / "constant" / "triSurface" / f"{spec.surface}.stl")
 
     (case / "0" / "U").write_text(_field_u(spec), encoding="utf-8")
-    (case / "0" / "p").write_text(_field_p(spec.surface), encoding="utf-8")
+    (case / "0" / "p").write_text(_field_p(spec.surface, spec), encoding="utf-8")
     k_inf, omega_inf = _turbulence_inlet(spec)
-    (case / "0" / "k").write_text(_field_scalar("k", k_inf, spec.surface, spec.wall_treatment), encoding="utf-8")
-    (case / "0" / "omega").write_text(_field_scalar("omega", omega_inf, spec.surface, spec.wall_treatment), encoding="utf-8")
-    (case / "0" / "nut").write_text(_field_nut(spec.surface, spec.wall_treatment), encoding="utf-8")
+    (case / "0" / "k").write_text(_field_scalar("k", k_inf, spec.surface, spec.wall_treatment, spec), encoding="utf-8")
+    (case / "0" / "omega").write_text(_field_scalar("omega", omega_inf, spec.surface, spec.wall_treatment, spec), encoding="utf-8")
+    (case / "0" / "nut").write_text(_field_nut(spec.surface, spec.wall_treatment, spec), encoding="utf-8")
 
     (case / "constant" / "transportProperties").write_text(
         _transport_properties(spec), encoding="utf-8")
@@ -180,6 +228,24 @@ def _field_u(spec: CaseSpec) -> str:
                  ) if spec.moving_ground else "noSlip"
     upstream_ground = ("symmetryPlane" if spec.upstream_slip_ground
                        else ground_bc)
+    if _is_yawed(spec):
+        # 偏航时侧壁/顶部是开放远场，不能继续使用 symmetryPlane；否则
+        # 侧向来流被强制成零法向速度，阻力和侧力都会系统性失真。
+        outer_bc = f'''"(top|sideLow|sideHigh)"
+    {{
+        type            pressureInletOutletVelocity;
+        value           uniform ({vec});
+    }}'''
+    else:
+        outer_bc = '''"(top|sideLow|sideHigh)"
+    {
+        type            symmetryPlane;
+    }'''
+    upstream_block = (f'''groundUpstream
+    {{
+        type            {upstream_ground};
+    }}'''
+                      if spec.upstream_slip_ground else '')
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
 {{
@@ -206,14 +272,8 @@ boundaryField
         inletValue      uniform (0 0 0);
         value           uniform ({vec});
     }}
-    "(top|sideLow|sideHigh)"
-    {{
-        type            symmetryPlane;
-    }}
-    groundUpstream
-    {{
-        type            {upstream_ground};
-    }}
+    {outer_bc}
+    {upstream_block}
     ground
     {{
         type            {ground_bc};
@@ -226,7 +286,24 @@ boundaryField
 """
 
 
-def _field_p(surface: str) -> str:
+def _field_p(surface: str, spec: CaseSpec | None = None) -> str:
+    outer_p = "zeroGradient" if spec is not None and _is_yawed(spec) else "symmetryPlane"
+    include_upstream = spec is None or spec.upstream_slip_ground
+    upstream_symmetry = '''groundUpstream
+    {
+        type            symmetryPlane;
+    }'''
+    if spec is not None and _is_yawed(spec):
+        outer_group = f'''"(top|sideLow|sideHigh)"
+    {{
+        type            {outer_p};
+    }}''' + ("\n    " + upstream_symmetry if include_upstream else "")
+    else:
+        patch_group = "(top|sideLow|sideHigh|groundUpstream)" if include_upstream else "(top|sideLow|sideHigh)"
+        outer_group = f'''"{patch_group}"
+    {{
+        type            symmetryPlane;
+    }}'''
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
 {{
@@ -251,10 +328,7 @@ boundaryField
         type            fixedValue;
         value           uniform 0;
     }}
-    "(top|sideLow|sideHigh|groundUpstream)"
-    {{
-        type            symmetryPlane;
-    }}
+    {outer_group}
     "(ground|{surface})"
     {{
         type            zeroGradient;
@@ -263,7 +337,8 @@ boundaryField
 """
 
 
-def _field_scalar(name: str, value: float, surface: str, treatment: str = "lowRe") -> str:
+def _field_scalar(name: str, value: float, surface: str,
+                  treatment: str = "lowRe", spec: CaseSpec | None = None) -> str:
     # k: 湍动能 m2/s2 -> [0 2 -2]；omega: 比耗散率 1/s -> [0 0 -1]
     dims = "[0 2 -2 0 0 0 0]" if name == "k" else "[0 0 -1 0 0 0 0]"
     # omegaWallFunction 自带粘性底层 blending，两种处理通用；
@@ -272,6 +347,24 @@ def _field_scalar(name: str, value: float, surface: str, treatment: str = "lowRe
         k_bc = "kLowReWallFunction" if treatment == "lowRe" else "kqRWallFunction"
     else:
         k_bc = "omegaWallFunction"
+    include_upstream = spec is None or spec.upstream_slip_ground
+    upstream_symmetry = '''groundUpstream
+    {
+        type            symmetryPlane;
+    }'''
+    if spec is not None and _is_yawed(spec):
+        outer_group = f'''"(top|sideLow|sideHigh)"
+    {{
+        type            inletOutlet;
+        inletValue      uniform {value:g};
+        value           uniform {value:g};
+    }}''' + ("\n    " + upstream_symmetry if include_upstream else "")
+    else:
+        patch_group = "(top|sideLow|sideHigh|groundUpstream)" if include_upstream else "(top|sideLow|sideHigh)"
+        outer_group = f'''"{patch_group}"
+    {{
+        type            symmetryPlane;
+    }}'''
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
 {{
@@ -298,10 +391,7 @@ boundaryField
         inletValue      uniform {value:g};
         value           uniform {value:g};
     }}
-    "(top|sideLow|sideHigh|groundUpstream)"
-    {{
-        type            symmetryPlane;
-    }}
+    {outer_group}
     "(ground|{surface})"
     {{
         type            {k_bc};
@@ -311,10 +401,27 @@ boundaryField
 """
 
 
-def _field_nut(surface: str, treatment: str = "lowRe") -> str:
+def _field_nut(surface: str, treatment: str = "lowRe", spec: CaseSpec | None = None) -> str:
     # nutUSpaldingWallFunction 基于 Spalding 连续律，y+ 从 <1 到 >100 全范围
     # 一致有效；nutkWallFunction 仅在对数区（y+>30）成立
     nut_bc = "nutUSpaldingWallFunction" if treatment == "lowRe" else "nutkWallFunction"
+    include_upstream = spec is None or spec.upstream_slip_ground
+    upstream_symmetry = '''groundUpstream
+    {
+        type            symmetryPlane;
+    }'''
+    if spec is not None and _is_yawed(spec):
+        outer_group = '''"(top|sideLow|sideHigh)"
+    {
+        type            calculated;
+        value           uniform 0;
+    }''' + ("\n    " + upstream_symmetry if include_upstream else '')
+    else:
+        patch_group = "(top|sideLow|sideHigh|groundUpstream)" if include_upstream else "(top|sideLow|sideHigh)"
+        outer_group = f'''"{patch_group}"
+    {{
+        type            symmetryPlane;
+    }}'''
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
 {{
@@ -340,10 +447,7 @@ boundaryField
         type            calculated;
         value           uniform 0;
     }}
-    "(top|sideLow|sideHigh|groundUpstream)"
-    {{
-        type            symmetryPlane;
-    }}
+    {outer_group}
     "(ground|{surface})"
     {{
         type            {nut_bc};
@@ -392,8 +496,7 @@ RAS
 
 def _control_dict(spec: CaseSpec, dom: dict) -> str:
     L = dom["L"]
-    front_area = ((spec.bbox.y_max - spec.bbox.y_min)
-                  * (spec.bbox.z_max - spec.bbox.z_min))
+    front_area = _reference_area(spec)
     drag_dir = _drag_dir(spec)
     if spec.solver_mode == "transient":
         # 瞬态（pimpleFoam）：物理时长默认 3 个对流时间尺度，
@@ -453,7 +556,12 @@ functions
     }}
 }}
 """
-    write_interval = max(50, spec.n_iterations // 10)
+    # Always emit at least one non-zero field and forceCoeffs sample during a
+    # short smoke run.  A fixed 50-step interval made 1-49 step validations
+    # finish with a solver log but no post-processing file or visualisable
+    # field, which is indistinguishable from a failed import downstream.
+    write_interval = max(1, min(50, spec.n_iterations // 10))
+    force_write_interval = max(1, min(10, spec.n_iterations // 10))
     return f"""/* AeroForge-Agent 自动生成 */
 FoamFile
 {{
@@ -488,7 +596,7 @@ functions
         type            forceCoeffs;
         libs            ("libforces.so");
         writeControl    timeStep;
-        writeInterval   10;
+        writeInterval   {force_write_interval};
 
         patches         ({spec.surface});
         rho             rhoInf;
@@ -644,6 +752,7 @@ solvers
 def _block_mesh_dict(dom: dict, base: float, spec: CaseSpec) -> str:
     ny = max(8, int(round((dom["y_max"] - dom["y_min"]) / base)))
     nz = max(8, int(round((dom["z_max"] - dom["z_min"]) / base)))
+    outer_patch_type = "patch" if _is_yawed(spec) else "symmetryPlane"
 
     use_split = spec.upstream_slip_ground and spec.bbox is not None
     if use_split:
@@ -727,7 +836,7 @@ boundary
     }}
     top
     {{
-        type symmetryPlane;
+        type {outer_patch_type};
         faces
         (
             (6 7 10 9)
@@ -736,7 +845,7 @@ boundary
     }}
     sideLow
     {{
-        type symmetryPlane;
+        type {outer_patch_type};
         faces
         (
             (0 1 7 6)
@@ -745,7 +854,7 @@ boundary
     }}
     sideHigh
     {{
-        type symmetryPlane;
+        type {outer_patch_type};
         faces
         (
             (3 4 10 9)
@@ -820,7 +929,7 @@ boundary
     }}
     top
     {{
-        type symmetryPlane;
+        type {outer_patch_type};
         faces
         (
             (4 5 6 7)
@@ -828,7 +937,7 @@ boundary
     }}
     sideLow
     {{
-        type symmetryPlane;
+        type {outer_patch_type};
         faces
         (
             (1 5 4 0)
@@ -836,7 +945,7 @@ boundary
     }}
     sideHigh
     {{
-        type symmetryPlane;
+        type {outer_patch_type};
         faces
         (
             (3 7 6 2)

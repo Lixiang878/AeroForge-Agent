@@ -16,7 +16,7 @@ from ..core.runtime_bridge import RuntimeBridge
 
 __all__ = [
     "run_mesh_sequence", "run_solver", "parse_residuals",
-    "parse_force_coeffs", "parse_mesh_stats", "run_checkmesh",
+    "parse_continuity_error", "parse_force_coeffs", "parse_mesh_stats", "run_checkmesh",
     # 兼容保留（旧 tutorial 路径，新流水线不再依赖）
     "find_similar_tutorial", "clone_tutorial", "run_simulation",
 ]
@@ -37,6 +37,8 @@ def run_mesh_sequence(case_dir: Path, bridge: RuntimeBridge,
         if res["returncode"] != 0:
             return {"ok": False, "dry_run": False, "stage": cmd, "logs": logs}
     res = bridge.run(["snappyHexMesh", "-overwrite"], cwd=case_dir, timeout=timeout)
+    if res.get("dry_run"):
+        return {"ok": False, "dry_run": True, "stage": "snappyHexMesh", "logs": logs}
     logs.append(res["log_path"])
     if res["returncode"] != 0:
         return {"ok": False, "dry_run": False, "stage": "snappyHexMesh", "logs": logs}
@@ -79,6 +81,56 @@ def parse_residuals(log_path: str | Path) -> dict[str, float]:
     return out
 
 
+def parse_continuity_error(log_path: str | Path) -> float | None:
+    """返回日志最后一次全局连续性误差的绝对百分比。
+
+    OpenFOAM 将该量打印为 ``global = ...``，它是无量纲的相对通量
+    不平衡；乘以 100 后与报告中的 ``flux_error_percent`` 一致。累计误差
+    不用于这个门禁，因为它是跨迭代积分量，不代表当前步的质量守恒。
+    """
+    p = Path(log_path)
+    if not p.exists():
+        return None
+    number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+    values = re.findall(
+        rf"time\s+step\s+continuity\s+errors\s*:.*?global\s*=\s*({number})",
+        p.read_text(encoding="utf-8", errors="ignore"),
+        flags=re.IGNORECASE,
+    )
+    if not values:
+        return None
+    return abs(float(values[-1])) * 100.0
+
+
+def _latest_force_coeff_file(case_dir: str | Path) -> Path | None:
+    """按数据中的最大时间选择 forceCoeffs 文件，而不是按文件名排序。
+
+    重跑或并行后处理可能同时留下 ``coefficient.dat``、
+    ``coefficient_0.dat`` 等文件；字典序会把较旧的文件选中。
+    """
+    files = list(Path(case_dir).glob("postProcessing/forceCoeffs*/*/*.dat"))
+    candidates: list[tuple[float, int, str, Path]] = []
+    for path in files:
+        last_time: float | None = None
+        try:
+            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if not line or line.startswith("#"):
+                    continue
+                try:
+                    last_time = float(line.split()[0])
+                except (ValueError, IndexError):
+                    continue
+        except OSError:
+            continue
+        if last_time is not None:
+            try:
+                mtime = path.stat().st_mtime_ns
+            except OSError:
+                mtime = 0
+            candidates.append((last_time, mtime, path.name, path))
+    return max(candidates, key=lambda item: item[:3])[3] if candidates else None
+
+
 def parse_force_breakdown(log_path: str | Path) -> dict[str, float]:
     """从求解日志最后的 forceCoeffs 输出块解析 Cd/Cl 的压差-摩擦分解。
 
@@ -108,10 +160,10 @@ def parse_force_coeffs(case_dir: str | Path) -> ForceCoeffs | None:
     稳健解析：优先读表头中的列名定位 Cd/Cl/Cm；无表头时按位置回退
     (Time Cd Cl Cm ...)。返回最后若干迭代的均值（稳态尾段）。
     """
-    files = sorted(Path(case_dir).glob("postProcessing/forceCoeffs*/*/*.dat"))
-    if not files:
+    selected = _latest_force_coeff_file(case_dir)
+    if selected is None:
         return None
-    text = files[-1].read_text(encoding="utf-8", errors="ignore")
+    text = selected.read_text(encoding="utf-8", errors="ignore")
     header_cols: list[str] = []
     for line in text.splitlines():
         if line.startswith("#"):

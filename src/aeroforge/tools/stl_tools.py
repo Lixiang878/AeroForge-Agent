@@ -7,13 +7,15 @@ Ahmed body（Ahmed et al., 1984）是汽车外流场 CFD 验证的经典基准�
 from __future__ import annotations
 
 import math
+import os
 import struct
+import tempfile
 from pathlib import Path
 
 from ..core.models import BoundingBox
 
 __all__ = ["read_stl_bbox", "ahmed_body_stl", "stl_surface_area",
-           "is_watertight", "signed_volume"]
+           "is_watertight", "signed_volume", "prepare_stl_for_cfd"]
 
 _ASCII_TOKEN = b"solid"
 
@@ -33,36 +35,151 @@ def _is_ascii_stl(head: bytes, size: int) -> bool:
 def read_stl_bbox(path: str | Path) -> BoundingBox:
     """解析 STL 顶点范围（自动识别 ASCII / binary 格式）。"""
     p = Path(path)
-    data = p.read_bytes()
-    xs: list[float] = []
-    ys: list[float] = []
-    zs: list[float] = []
-    if _is_ascii_stl(data[:84], len(data)):
-        for line in data.decode("ascii", errors="ignore").splitlines():
-            parts = line.split()
-            if len(parts) == 4 and parts[0] == "vertex":
-                xs.append(float(parts[1])); ys.append(float(parts[2])); zs.append(float(parts[3]))
-    else:
-        n = struct.unpack("<I", data[80:84])[0]
-        for i in range(n):
-            base = 84 + i * 50 + 12  # 跳过法向量，逐顶点 3 float x 3
-            for k in range(3):
-                x, y, z = struct.unpack("<fff", data[base + k * 12: base + k * 12 + 12])
-                xs.append(x); ys.append(y); zs.append(z)
-    if not xs:
+    lower = [float("inf")] * 3
+    upper = [float("-inf")] * 3
+    for triangle in _iter_triangles(p):
+        for x, y, z in triangle:
+            for index, value in enumerate((x, y, z)):
+                lower[index] = min(lower[index], value)
+                upper[index] = max(upper[index], value)
+    if lower[0] == float("inf"):
         raise ValueError(f"STL has no vertices: {p}")
-    return BoundingBox(x_min=min(xs), x_max=max(xs), y_min=min(ys), y_max=max(ys),
-                       z_min=min(zs), z_max=max(zs))
+    return BoundingBox(x_min=lower[0], x_max=upper[0], y_min=lower[1], y_max=upper[1],
+                       z_min=lower[2], z_max=upper[2])
+
+
+def _iter_triangles(path: str | Path):
+    """流式读取 ASCII 或 binary STL，并在截断时明确失败。
+
+    真实车辆 STL 常有数百 MB。这里不能先 ``read_bytes`` 再构造全部顶点
+    列表，否则封闭性检查会同时保留原始文件、顶点和边表，内存峰值可达
+    文件大小的数十倍。
+    """
+    p = Path(path)
+    size = p.stat().st_size
+    with p.open("rb") as fh:
+        head = fh.read(84)
+    if _is_ascii_stl(head, size):
+        triangle = []
+        with p.open("r", encoding="ascii", errors="ignore") as fh:
+            lines = fh
+            for line in lines:
+                parts = line.split()
+                if len(parts) != 4 or parts[0].lower() != "vertex":
+                    continue
+                try:
+                    triangle.append((float(parts[1]), float(parts[2]), float(parts[3])))
+                except ValueError as exc:
+                    raise ValueError(f"Invalid ASCII STL vertex in {p}") from exc
+                if len(triangle) == 3:
+                    yield tuple(triangle)
+                    triangle.clear()
+        if triangle:
+            raise ValueError(f"ASCII STL has incomplete triangle in {p}")
+        return
+
+    if len(head) < 84:
+        raise ValueError(f"Binary STL is truncated: {p}")
+    n = struct.unpack("<I", head[80:84])[0]
+    expected = 84 + n * 50
+    if size < expected:
+        raise ValueError(f"Binary STL is truncated: {p}")
+    with p.open("rb") as fh:
+        fh.seek(84)
+        for _ in range(n):
+            record = fh.read(50)
+            if len(record) != 50:
+                raise ValueError(f"Binary STL is truncated: {p}")
+            values = struct.unpack("<12fH", record)
+            yield (
+                tuple(values[3:6]),
+                tuple(values[6:9]),
+                tuple(values[9:12]),
+            )
+
+
+def prepare_stl_for_cfd(source: str | Path, destination: str | Path, *,
+                        target_ground_z: float | None = None,
+                        scale: float = 1.0,
+                        rotation_z_deg: float = 0.0) -> BoundingBox:
+    """把任意 ASCII/binary STL 流式转为单一区域 binary STL。
+
+    转换会保留三角形绕序，重新计算法向，并可统一缩放及把最低点平移到
+    ``target_ground_z``，并可绕全局 z 轴旋转以匹配求解器的正 x 来流约定。
+    binary STL 不保存多个 ``solid`` 名，因此可避免多零件车辆导入后生成
+    未配置的 OpenFOAM patch；当前流程仍把车身、车轮和附件作为一个固定
+    壁面，独立旋转车轮需另行扩展 patch 映射。
+    """
+    src = Path(source)
+    dst = Path(destination)
+    if src.resolve() == dst.resolve():
+        raise ValueError("source and destination STL paths must differ")
+    if not math.isfinite(scale) or scale <= 0:
+        raise ValueError("STL scale must be positive and finite")
+    if not math.isfinite(rotation_z_deg):
+        raise ValueError("rotation_z_deg must be finite")
+    if target_ground_z is not None and not math.isfinite(target_ground_z):
+        raise ValueError("target_ground_z must be finite when provided")
+
+    original_bbox = read_stl_bbox(src)
+    z_shift = 0.0 if target_ground_z is None else (
+        target_ground_z - scale * original_bbox.z_min
+    )
+    angle = math.radians(rotation_z_deg)
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp_handle = tempfile.NamedTemporaryFile(
+        mode="w+b", prefix=f".{dst.name}.", suffix=".tmp",
+        dir=dst.parent, delete=False,
+    )
+    tmp_path = Path(tmp_handle.name)
+    count = 0
+    try:
+        with tmp_handle as fh:
+            fh.write(b"AeroForge normalized CFD surface".ljust(80, b" "))
+            fh.write(struct.pack("<I", 0))
+            for triangle in _iter_triangles(src):
+                transformed = tuple(
+                    (
+                        scale * (cos_a * point[0] - sin_a * point[1]),
+                        scale * (sin_a * point[0] + cos_a * point[1]),
+                        scale * point[2] + z_shift,
+                    )
+                    for point in triangle
+                )
+                if not all(math.isfinite(value) for point in transformed for value in point):
+                    raise ValueError(f"STL contains non-finite coordinates: {src}")
+                a, b, c = transformed
+                ux, uy, uz = (b[i] - a[i] for i in range(3))
+                vx, vy, vz = (c[i] - a[i] for i in range(3))
+                nx = uy * vz - uz * vy
+                ny = uz * vx - ux * vz
+                nz = ux * vy - uy * vx
+                norm = math.sqrt(nx * nx + ny * ny + nz * nz)
+                if norm == 0:
+                    raise ValueError(f"STL contains a degenerate triangle: {src}")
+                fh.write(struct.pack("<fff", nx / norm, ny / norm, nz / norm))
+                for point in transformed:
+                    fh.write(struct.pack("<fff", *point))
+                fh.write(struct.pack("<H", 0))
+                count += 1
+            if count == 0:
+                raise ValueError(f"STL has no triangles: {src}")
+            if count > 0xFFFFFFFF:
+                raise ValueError(f"STL has too many triangles for binary format: {src}")
+            fh.seek(80)
+            fh.write(struct.pack("<I", count))
+        os.replace(tmp_path, dst)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return read_stl_bbox(dst)
 
 
 def stl_surface_area(path: str | Path) -> float:
-    """binary STL 表面积（用于几何合理性检查）。"""
-    data = Path(path).read_bytes()
-    n = struct.unpack("<I", data[80:84])[0]
+    """计算 ASCII/binary STL 表面积（用于几何合理性检查）。"""
     area = 0.0
-    for i in range(n):
-        base = 84 + i * 50 + 12
-        pts = [struct.unpack("<fff", data[base + k * 12: base + k * 12 + 12]) for k in range(3)]
+    for pts in _iter_triangles(path):
         ax = pts[1][0] - pts[0][0]; ay = pts[1][1] - pts[0][1]; az = pts[1][2] - pts[0][2]
         bx = pts[2][0] - pts[0][0]; by = pts[2][1] - pts[0][1]; bz = pts[2][2] - pts[0][2]
         cx = ay * bz - az * by; cy = az * bx - ax * bz; cz = ax * by - ay * bx
@@ -72,27 +189,31 @@ def stl_surface_area(path: str | Path) -> float:
 
 def is_watertight(path: str | Path) -> bool:
     """封闭性检查：每条无向边必须恰好被两个三角形共享（流形表面）。"""
-    data = Path(path).read_bytes()
-    n = struct.unpack("<I", data[80:84])[0]
+    bbox = read_stl_bbox(path)
+    if bbox is None:
+        return False
+    scale = max(bbox.x_max - bbox.x_min, bbox.y_max - bbox.y_min,
+                bbox.z_max - bbox.z_min, 1.0)
+    # ASCII STL 常以有限有效数字写出同一顶点；量化避免 0 与
+    # -2e-16 这类舍入差异被误判为断边，同时保持相对几何容差很小。
+    tolerance = scale * 1e-7
+
+    def vertex_key(point):
+        return tuple(round(float(value) / tolerance) for value in point)
+
     edges: dict[tuple, int] = {}
-    for i in range(n):
-        base = 84 + i * 50 + 12
-        pts = [struct.unpack("<fff", data[base + k * 12: base + k * 12 + 12]) for k in range(3)]
+    for pts in _iter_triangles(path):
         for a, b in ((pts[0], pts[1]), (pts[1], pts[2]), (pts[2], pts[0])):
-            key = (a, b) if a <= b else (b, a)
+            ka, kb = vertex_key(a), vertex_key(b)
+            key = (ka, kb) if ka <= kb else (kb, ka)
             edges[key] = edges.get(key, 0) + 1
-    return all(c == 2 for c in edges.values())
+    return bool(edges) and all(c == 2 for c in edges.values())
 
 
 def signed_volume(path: str | Path) -> float:
     """散度定理计算带符号体积：法向一致朝外时为正（方向一致性检查）。"""
-    data = Path(path).read_bytes()
-    n = struct.unpack("<I", data[80:84])[0]
     vol = 0.0
-    for i in range(n):
-        base = 84 + i * 50 + 12
-        a, b, c = (struct.unpack("<fff", data[base + k * 12: base + k * 12 + 12])
-                   for k in range(3))
+    for a, b, c in _iter_triangles(path):
         vol += (a[0] * (b[1] * c[2] - b[2] * c[1])
                 + a[1] * (b[2] * c[0] - b[0] * c[2])
                 + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6.0
@@ -159,7 +280,8 @@ def ahmed_body_stl(path: str | Path, slant_angle_deg: float = 25.0,
 
     def fan(pts: list[tuple], flip: bool) -> list[tuple]:
         tris = [(pts[0], pts[i], pts[i + 1]) for i in range(1, len(pts) - 1)]
-        return [(b, c, a) if flip else (a, b, c) for (a, b, c) in tris]
+        # 循环移位不会改变绕序；右侧面需要真正反转法向。
+        return [(a, c, b) if flip else (a, b, c) for (a, b, c) in tris]
 
     def rect(p1, p2, p3, p4) -> list[tuple]:
         return [(p1, p2, p3), (p1, p3, p4)]

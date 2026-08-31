@@ -83,7 +83,9 @@ def _detect_runtime_uncached(timeout: float) -> RuntimeInfo:
                 break
         try:
             if versions:
-                ver = sorted(versions)[-1]
+                # 版本号按数字比较；字典序会把 openfoam9 错判为高于
+                # openfoam2412，导致工具链意外回退到旧发行版。
+                ver = max(versions, key=lambda item: int(item.removeprefix("openfoam")))
                 bashrc = f"/usr/lib/openfoam/{ver}/etc/bashrc"
                 chk = subprocess.run(
                     [wsl, "-e", "bash", "-lc",
@@ -160,10 +162,15 @@ class RuntimeBridge:
 
         if self.info.backend == "native":
             cmd: list[str] = list(argv)
-            with log.open("w", encoding="utf-8", errors="replace") as fh:
-                proc = subprocess.run(
-                    cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
-                    text=True, timeout=timeout, check=False)
+            try:
+                with log.open("w", encoding="utf-8", errors="replace") as fh:
+                    proc = subprocess.run(
+                        cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
+                        text=True, timeout=timeout, check=False)
+            except subprocess.TimeoutExpired:
+                return {"dry_run": False, "returncode": -1,
+                        "backend": self.info.backend, "log_path": str(log),
+                        "timed_out": True}
         else:
             # 日志在 WSL 内部重定向（wsl.exe 自身的重定向会把输出转成
             # UTF-16，导致日志不可读），Windows 侧直接可读 /mnt 路径。
@@ -173,9 +180,15 @@ class RuntimeBridge:
                       f"cd {shlex.quote(rcwd)} && "
                       + " ".join(shlex.quote(a) for a in argv)
                       + f" > {shlex.quote(rlog)} 2>&1")
-            proc = subprocess.run(
-                [_wsl_exe(), "-e", "bash", "-lc", script],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=timeout, check=False)
+            try:
+                proc = subprocess.run(
+                    [_wsl_exe(), "-e", "bash", "-lc", script],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=timeout, check=False)
+            except subprocess.TimeoutExpired:
+                return {"dry_run": False, "returncode": -1,
+                        "backend": self.info.backend, "log_path": str(log),
+                        "timed_out": True}
         return {"dry_run": False, "returncode": proc.returncode,
-                "backend": self.info.backend, "log_path": str(log)}
+                "backend": self.info.backend, "log_path": str(log),
+                "timed_out": False}

@@ -3,7 +3,19 @@
 > 写给接手的 AI / 工程师：本文档交代**已做工作、当前真实状态、已知坑、未完成事项**，
 > 并列出**需要复核的疑点**与验证方法。请带着审查眼光阅读——前任（我）的方案
 > 可能有误，欢迎推翻。
-> 最后更新：2026-08-23（v0.4.0 回归初心版：可视化产品化 + 冗余清理）。
+> 最后更新：2026-08-31（真实 DrivAerML STL 导入、动态色标修复与媒体复核）。
+
+## 0.6. 2026-08-31 当前媒体与色标收尾
+
+- `case/results/static_velocity_metadata.json` 是当前数值依据：入口 `u_free=30 m/s`，
+  源点 `|U|` 最大 `43.9123 m/s`；原生多面体追踪器的 `158.504 m/s` 车顶尖峰已由
+  后处理 `Tetrahedralize + Cell Locator` 排除，完整流线样本为 `10.9633–35.8485 m/s`。
+  显示色标按有效样本动态确定并留 `8%` 头部空间，为 `10.9633–38.7164 m/s`（线性）。
+- 当前静帧、动画和交互页统一采用 Viridis（Cividis 兼容回退），逐点速度着色；交互页
+  的固定长度方向箭头使用线段箭头而不是实体 Cone，避免箭头表面叠成暗块。动画输出为
+  `120` 帧、`40 fps`，交互页仍支持轨道旋转、滚轮缩放、时间滑块和三组预设机位。
+- 收尾产物已同步至 `docs/img/`、`docs/media/`；P7 资产仍是独立的视觉候选，不能沿用
+  DrivAerML 的风场或被标作 P7 CFD 结果。
 
 ---
 
@@ -29,6 +41,22 @@
    Cd=0.449，含三机位渲染图）；其余十六个目录的结论均已固化在
    docs/VALIDATION.md。
 6. 验证示例图已入仓库 `docs/img/`（README 首屏展示真实渲染效果）。
+
+## 0.5. 2026-08-30 追加审查（真实车辆与结果图）
+
+1. 引入公开 DrivAerML `run_1/drivaer_1.stl`：753,234 个三角面，流式转为
+   单区域 binary STL，显式支持尺度、地面对齐和 z 轴旋转；本地准备件的
+   `surfaceCheck` 已确认封闭、单连通区域、每条边两面。来源/许可证/哈希在
+   `docs/REAL_VEHICLE_MODEL.md` 与工作区 `SOURCE.md`。
+2. 新增 `examples/run_drivaerml.py` 和 CLI 上传几何控制项。真实车辆的
+   55,504-cell、160 步低成本复算已经通过当前门禁并得到 Cd=0.2338；这只是
+   导入/网格/求解链冒烟，不是网格无关性或工业精度结论。
+3. `tools/pv_templates/streamline_hd.py` 已改用有限透明采样面、Cividis 色标（宽量程
+   自动使用物理刻度 `log10`）、中性车体材质和首帧相机初始化；并显式把所有
+   StreamTracer 绑定到 CFD 的
+   `U` 向量，避免继承 STL 法向导致车顶流线消失；图像仍必须来自实际 OpenFOAM 场。
+4. 当前离线回归为 131 tests；短稳态冒烟的场和 forceCoeffs 写盘间隔已按迭代
+   数自适应，避免短跑没有可视化场的假失败。
 
 ---
 
@@ -82,7 +110,7 @@ src/aeroforge/
 ├── core/runtime_bridge.py   三态运行时（native/WSL/不可用）；WSL 内重定向日志
 ├── core/models.py           Pydantic 契约（Task/Geometry/Mesh/Sim/FinalReport）
 ├── tools/case_builder.py    从零生成 OpenFOAM case（steady/transient 双模式）
-├── tools/stl_tools.py       Ahmed body 参数化 STL（圆角 R100/R50）+ 水密/外法向检查
+├── tools/stl_tools.py       Ahmed body 参数化 STL + 上传 STL 流式转换/水密检查/坐标变换
 ├── tools/openfoam_tools.py  求解序列 + 残差/forceCoeffs/checkMesh 解析
 ├── tools/validation.py      Cd 对比判据（20°→0.197 / 25°→0.285，±10%）
 └── agents/*                 六阶段顺序编排（需求→几何→物理→网格→求解→分析）
@@ -90,6 +118,7 @@ examples/
 ├── verify_ahmed.py          端到端稳态验证（--slant 20/25）
 ├── animate_ahmed.py         瞬态 pimpleFoam 动画算例（复用稳态网格+初场）
 ├── resume_transient.py      中断续算（startFrom latestTime）
+├── run_drivaerml.py         公开 DrivAerML 真实车辆 STL 低成本导入冒烟
 └── paraview/
     ├── windtunnel_view.py   风洞视角截图（隐藏外壁/烟线/光片/车体/机位）
     ├── render_animation.py  离屏渲染动画序列帧
@@ -191,11 +220,11 @@ bridge 里加 `mpirun -np N` 路径即可，我未做。
 
 ```powershell
 cd e:\GitHub项目\aeroforge-agent
-E:\Anaconda\python.exe -m pytest tests -q                 # 28 离线测试
+E:\Anaconda\python.exe -m pytest tests -q                 # 以本机新鲜输出为准
 E:\Anaconda\python.exe examples/verify_ahmed.py --slant 20   # 稳态验证（~35min）
 E:\Anaconda\python.exe examples/animate_ahmed.py             # 瞬态动画算例（~1.5h）
 E:\Anaconda\python.exe examples/resume_transient.py          # 续算
-D:\ParaView\bin\pvpython.exe examples/paraview/render_animation.py  # 动画帧
+D:\ParaView\bin\pvpython.exe examples/paraview/render_animation.py  # 旧版底层动画帧脚本
 D:\ParaView\bin\pvpython.exe examples/paraview/save_state.py        # 流线 .pvsm
 # 推送：git -c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890 push origin main
 ```
@@ -210,3 +239,49 @@ D:\ParaView\bin\pvpython.exe examples/paraview/save_state.py        # 流线 .pv
 
 链路是通的、数据是真的、报告是诚实的；**精度还没达标，而且我的归因只是假设**。
 请先做 §7-A 的复核实验，再决定把算力投给网格、湍流模型还是几何。祝顺利。
+
+---
+
+## 10. 2026-08-30 审查增补
+
+本轮审查新增了收敛证据门禁、偏航开放边界、ASCII/binary STL 统一校验、几何
+封闭性/法向修复、显式上传失败保护、运行时超时和状态传播。完整证据与未完成
+事项见 [`docs/AUDIT_2026-08-30.md`](docs/AUDIT_2026-08-30.md)。
+
+注意：工作区 `diag_case5` 中历史 `verification_report.md` 的 Cd=0.449 与更晚
+`coefficient.dat`（尾段约 0.486）不一致；这是后处理时间选择问题，不能把两者
+当作同一轮结果。重做 Ahmed 验证前应清理/隔离旧 `postProcessing`，并固定算例
+目录、字典和后处理时间范围。
+
+---
+
+## 11. 2026-08-31 车型资产、流线表示与产品动画增补
+
+- 品牌车型现在必须提供水密 STL 与 `ModelAssetManifest`，在几何导入前核对来源、
+  许可证和 SHA-256；不得再把“宝马/奥迪/小鹏”等任务静默替换为简化车。
+- 仓库只记录大众、奥迪、宝马、小鹏、理想、问界的候选获取页面及许可风险，
+  不捆绑受限源模型，详见 `docs/VEHICLE_ASSET_POLICY.md`。
+- CLI 新增 `--vehicle-color`、`--animation`、`--animation-mode`、`--animation-frames`、
+  `--animation-fps`。稳态默认是冻结真实 `U(x)` 中的无质量示踪粒子输运，相机环绕
+  是显式可选模式；只有 `pimpleFoam` 多物理时间步才可标作瞬态。产物清单记录模式、
+  源 U/几何/模板哈希、实际 GIF 延时/MP4 帧率和粒子输运时间。
+- 流线种子已从三条 Line 改为与 `internalMesh` 相交的有限近车身 YZ 播种面（15×11），
+  覆盖车身可见截面；箭头显式绑定 `U` 方向、关闭速度缩放并固定长度，低速箭头过滤，
+  颜色/色标只表示 `|U|`。模板和图注均不把箭头密度当作烟雾浓度。
+- 当前可交付演示位于 `docs/media/drivaerml_steady_particles.gif/.mp4`（120 帧、
+  40 fps、约 3 s 播放）以及 `docs/media/drivaerml_steady_particles.html`；HTML 可鼠标
+  轨道旋转/滚轮缩放，含 Viridis（Cividis 回退）`|U| (m/s)` 色标、输运时间滑块和前视/尾流/俯视预设。
+  `docs/media/drivaerml_steady_orbit.gif/.mp4` 与三机位蓝色车身静帧仍保留。它们来自
+  DrivAerML 展示算例，不构成气动力精度证明。
+- 测试临时目录由 `pytest.ini` 固定在 `workspace/_scratch/pytest`，MP4 编码临时文件
+  使用目标输出目录并在成功/失败后清理；本轮没有新增 C 盘媒体或缓存。
+
+具体车型运行示例：
+
+```powershell
+aeroforge "宝马 X3 外流场 30 m/s" `
+  --upload-stl D:\models\bmw_x3_closed.stl `
+  --model-manifest D:\models\bmw_x3_manifest.json `
+  --vehicle-color "#1A80E6" `
+  --animation
+```

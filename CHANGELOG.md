@@ -1,5 +1,75 @@
 # Changelog
 
+## Unreleased - 2026-08-31
+
+### Visualization and vehicle asset refinement
+- Re-rendered the DrivAerML showcase with a light paper-style composition,
+  Viridis colouring (Cividis fallback), a data-driven physical speed range with
+  8% headroom, and automatic log10 scaling only when the sampled `|U|` span is
+  wide. Scalar bars are larger, framed, and labelled in m/s; direction arrows
+  remain fixed-length and neutral.
+- Increased the default playback rate to 40 fps (120 frames, about 3 s) while
+  retaining the same `IntegrationTime`-based tracer interpolation and release
+  cadence, so motion is faster without changing the underlying CFD field.
+- Added `p7_visual_sanitized.glb` as a material-preserving, visual-only derivative
+  of the user-supplied XPeng P7 OBJ. The non-finite material group was excluded;
+  the original OBJ remains the provenance record and neither asset is accepted as
+  a CFD wall until a separately repaired watertight exterior passes `surfaceCheck`.
+
+## Unreleased - 2026-08-30
+
+### Reliability audit
+- Added a fail-closed asset manifest for named production vehicles: source URL,
+  license, SHA-256, units, axes and rights must accompany an uploaded STL;
+  missing or mismatched evidence no longer falls back to the simplified car.
+- Added configurable uniform body paint (`--vehicle-color`) and a production
+  animation path (`--animation`): actual OpenFOAM `U` and `IntegrationTime` drive
+  steady-field tracers, with camera orbit as an explicit alternative. Transient
+  frames retain physical pimpleFoam times; GIF/optional MP4 outputs carry field,
+  geometry, template and media hashes plus distinct transport/playback timing.
+- Reject transient-to-steady relabelling, mismatched CFD/display geometry and
+  mismatched requested/manifest vehicle identity. Corrected the nose direction
+  to upstream -X (freestream +X) and made manifest units control scale conversion.
+- Documented legally safer acquisition candidates for Volkswagen, Audi, BMW,
+  XPeng, Li Auto and AITO without bundling or redistributing restricted meshes.
+- Added evidence-based solver gates for residuals, global continuity, `End`, mesh status, and fresh force-coefficient output; non-converged coefficients are hidden from reports and CLI output.
+- Corrected transient mode selection (`pimpleFoam`), yaw far-field boundary conditions and projected reference area, translated-domain top margin, numeric WSL OpenFOAM version selection, and pipeline status propagation.
+- Hardened ASCII/binary STL validation and repaired the generated car, Ahmed, cylinder, and NACA surfaces used by the examples (closure/connectivity/orientation).
+- Added audit regressions for STL streaming/normalization, upload controls, short-run
+  field/force write intervals, and pipeline gates; the full suite now has 160 tests.
+- Added a reproducible DrivAerML public-vehicle import path (CC BY-SA 4.0), with
+  watertight/surfaceCheck evidence, optional scale/ground/rotation transforms, and
+  `examples/run_drivaerml.py` (explicit smoke/showcase profiles).
+- Replaced the three-layer streamline seed with one finite 15×11 near-body YZ
+  seeding plane clipped to `internalMesh`; removed spherical nodes and added
+  fixed-length arrows oriented by `U`. Streamline colour remains the fixed,
+  measured `|U|` range, with explicit steady-field tracer-advection metadata.
+- Decoupled steady-particle releases from video frame count: 64 releases per
+  transport cycle, at least two frame intervals of trail history, and stable
+  path/release arrow selection rendered with `GlyphMode=All Points`; the
+  verified showcase is now 120 frames at 40 fps.
+- Added a self-contained Plotly orbit viewer (`interactive_viz.py` plus the
+  pvpython exporter) with a physical `|U| (m/s)` colourbar, fixed-length
+  U-oriented arrows, play/pause and transport-time slider, preset cameras,
+  mouse orbit and wheel zoom. It exports the actual OpenFOAM field and a
+  bounded VTK display mesh, never a synthetic velocity field.
+- Recorded the user-supplied XPeng P7 ZIP on the E: volume with hashes and
+  an asset audit. Its OBJ/MTL is a visual candidate only: one component has
+  non-finite coordinates and the assembled surface is not watertight, so it
+  is not passed into the DrivAerML CFD case.
+- Kept pytest basetemp and MP4 encoding scratch files on the E: project volume;
+  failed encodes clean their destination-local temporary file. The current full
+  suite count is recorded by the final verification command below.
+- Reworked the ParaView template around finite field sampling, a neutral vehicle
+  material, Viridis colouring (Cividis fallback; log10 when the sampled speed range is wide), stable
+  camera framing, and depth/opacity controls;
+  it still renders only actual OpenFOAM fields. StreamTracer now explicitly selects
+  the CFD `U` vector instead of inheriting STL surface normals, so roof and upper
+  streamlines are retained.
+- Replaced the repository README preview images with a verified DrivAerML showcase
+  render; the denser showcase case is documented as illustrative, not mesh-independent.
+- See [`docs/AUDIT_2026-08-30.md`](docs/AUDIT_2026-08-30.md) for evidence and unresolved CFD-accuracy work.
+
 ## 0.4.0 - 2026-08-23
 
 **回归初心：一句话 → 仿真 → 风洞级可视化。** v0.3.0 期间项目重心漂移到

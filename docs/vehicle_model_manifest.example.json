@@ -1,0 +1,18 @@
+{
+  "model_id": "manufacturer-model-year-private",
+  "manufacturer": "Manufacturer",
+  "model": "Model",
+  "model_year": "2026",
+  "source_url": "private://user-supplied",
+  "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "license_id": "private-authorized-use",
+  "license_url": null,
+  "source_format": "STL",
+  "units": "m",
+  "forward_axis": "-X",
+  "up_axis": "+Z",
+  "redistribution_allowed": false,
+  "derivatives_allowed": true,
+  "cfd_ready": false,
+  "notes": "Replace every placeholder and the SHA-256 before use."
+}

@@ -40,17 +40,52 @@ def naca4_coordinates(code='0012',points=80):
     return list(reversed(up))+lo[1:-1]
 def create_naca_stl(path,code='0012',chord=1,span=.02,points=80):
     prof=[(x*chord,y*chord) for x,y in naca4_coordinates(code,points)]; t=[]
-    for a,b in zip(prof,prof[1:]): _quad(t,(a[0],a[1],-span/2),(b[0],b[1],-span/2),(b[0],b[1],span/2),(a[0],a[1],span/2))
+    # 闭合尾缘；原实现只连接相邻点，留下 upper/lower trailing-edge 的
+    # 6 条单边，surfaceCheck 会把翼型判为 open surface。
+    profile_edges = zip(prof, prof[1:] + prof[:1])
+    for a,b in profile_edges: _quad(t,(a[0],a[1],-span/2),(b[0],b[1],-span/2),(b[0],b[1],span/2),(a[0],a[1],span/2))
     for z in (-span/2,span/2):
         c=(sum(x for x,y in prof)/len(prof),sum(y for x,y in prof)/len(prof),z)
-        for a,b in zip(prof,prof[1:]): t.append((c,(a[0],a[1],z),(b[0],b[1],z)))
+        for a,b in zip(prof, prof[1:] + prof[:1]):
+            # x-y 轮廓为 CCW：上端盖法向 +z，下端盖需反转为 -z。
+            t.append((c,(a[0],a[1],z),(b[0],b[1],z)) if z > 0
+                     else (c,(b[0],b[1],z),(a[0],a[1],z)))
     return write_ascii_stl(path,t,'naca'+str(code))
-def car_triangles(length=4.7,width=1.9,height=1.7):
-    L,W=length/2,width/2; z=height*.48; t=[]
-    for box in [[(-L,-W,0),(L,-W,0),(L,W,0),(-L,W,0),(-L,-W,z),(L,-W,z),(L,W,z),(-L,W,z)],[(-L*.42,-W*.78,z),(L*.42,-W*.78,z),(L*.42,W*.78,z),(-L*.42,W*.78,z),(-L*.32,-W*.65,height),(L*.32,-W*.65,height),(L*.32,W*.65,height),(-L*.32,W*.65,height)]]:
-        for ids in ((0,1,2,3),(4,7,6,5),(0,4,5,1),(1,5,6,2),(2,6,7,3),(3,7,4,0)): _quad(t,*[box[i] for i in ids])
+def car_triangles(length=4.7,width=1.9,height=1.7,ground_clearance=0.12):
+    if length <= 0 or width <= 0 or height <= 0 or ground_clearance < 0:
+        raise ValueError('car dimensions must be positive and ground_clearance non-negative')
+    L,W=length/2,width/2
+    z0=ground_clearance; z=ground_clearance + height*.48; z_top=ground_clearance + height
+    # 车身与座舱必须构成一个联合边界。旧实现把两个完整盒子叠在一起，
+    # surfaceCheck 会报告两个 disconnected parts，snappy 可能把内部重叠面
+    # 当成额外壁面。这里去掉接口底面并用矩形环连接，保留一个封闭壳体。
+    lower = [(-L,-W,z0),(L,-W,z0),(L,W,z0),(-L,W,z0),
+             (-L,-W,z),(L,-W,z),(L,W,z),(-L,W,z)]
+    inner = [(-L*.42,-W*.78,z),(L*.42,-W*.78,z),
+             (L*.42,W*.78,z),(-L*.42,W*.78,z)]
+    top = [(-L*.32,-W*.65,z_top),(L*.32,-W*.65,z_top),
+           (L*.32,W*.65,z_top),(-L*.32,W*.65,z_top)]
+    t=[]
+    # 车身底面与四个侧面（顶面由下面的环补齐）
+    for ids in ((0,3,2,1),(0,1,5,4),(1,2,6,5),(2,3,7,6),(3,0,4,7)):
+        _quad(t,*[lower[i] for i in ids])
+    # 车身顶部环：外圈与座舱底圈共用精确顶点
+    outer = lower[4:8]
+    for a,b,c,d in ((outer[0],outer[1],inner[1],inner[0]),
+                    (outer[1],outer[2],inner[2],inner[1]),
+                    (outer[2],outer[3],inner[3],inner[2]),
+                    (outer[3],outer[0],inner[0],inner[3])):
+        _quad(t,a,b,c,d)
+    # 座舱四侧与车顶，不再生成隐藏的底面
+    for a,b,c,d in ((inner[0],inner[1],top[1],top[0]),
+                    (inner[1],inner[2],top[2],top[1]),
+                    (inner[2],inner[3],top[3],top[2]),
+                    (inner[3],inner[0],top[0],top[3])):
+        _quad(t,a,b,c,d)
+    _quad(t,*top)
     return t
-def create_car_stl(path,length=4.7,width=1.9,height=1.7): return write_ascii_stl(path,car_triangles(length,width,height),'car')
+def create_car_stl(path,length=4.7,width=1.9,height=1.7,ground_clearance=0.12):
+    return write_ascii_stl(path,car_triangles(length,width,height,ground_clearance),'car')
 def generate_geometry(kind,output_path,**kwargs):
     k=str(kind).lower().replace('-','_')
     if k in ('car','automobile'): return create_car_stl(output_path,**kwargs)
@@ -58,12 +93,9 @@ def generate_geometry(kind,output_path,**kwargs):
     if k in ('cylinder','cyl'): return create_cylinder_stl(output_path,**kwargs)
     raise ValueError(f'unsupported geometry kind: {kind}')
 def validate_stl(stl_path):
-    p=Path(stl_path); text=p.read_text(encoding='ascii',errors='ignore'); verts=[]
-    for line in text.splitlines():
-        m=re.search(r'vertex\s+([-+\deE.]+)\s+([-+\deE.]+)\s+([-+\deE.]+)',line)
-        if m: verts.append(tuple(float(x) for x in m.groups()))
-    if not verts: raise ValueError(f'No STL vertices found: {p}')
-    xs,ys,zs=zip(*verts); bbox=BoundingBox(x_min=min(xs),x_max=max(xs),y_min=min(ys),y_max=max(ys),z_min=min(zs),z_max=max(zs))
-    return bbox
+    # 统一走 stl_tools 的 ASCII/binary 解析器；旧实现只读 ASCII，
+    # 上传常见的 binary STL 会被误报为空几何。
+    from .stl_tools import read_stl_bbox
+    return read_stl_bbox(Path(stl_path))
 def bbox_diagonal(bbox): return math.sqrt((bbox.x_max-bbox.x_min)**2+(bbox.y_max-bbox.y_min)**2+(bbox.z_max-bbox.z_min)**2)
 generate_car_stl=create_car_stl; generate_naca_stl=create_naca_stl; generate_cylinder_stl=create_cylinder_stl

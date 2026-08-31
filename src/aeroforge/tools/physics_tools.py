@@ -27,18 +27,20 @@ def pressure_coefficient(pressure, reference_pressure=0.0, rho=1.225, velocity=1
 
 
 def check_flux_conservation(case_dir):
+    """返回求解日志最后一次全局连续性误差百分比；无证据返回 ``None``。"""
     from pathlib import Path
-    import re
-    logs=list(Path(case_dir).glob('log.*'))
-    if not logs: return 0.0
-    text=logs[-1].read_text(encoding='utf-8', errors='ignore')
-    vals=[float(x) for x in re.findall(r'(?:inlet|outlet).*?([-+\\d.eE]+)', text, re.I)]
-    if len(vals)>=2:
-        a,b=abs(vals[-2]),abs(vals[-1]); return abs(a-b)/max(a,b,1e-12)*100
-    return 0.0
+    from .openfoam_tools import parse_continuity_error
+
+    candidates = []
+    for log in Path(case_dir).glob('log.*'):
+        value = parse_continuity_error(log)
+        if value is not None:
+            candidates.append((log.stat().st_mtime_ns, value))
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 def check_symmetry(case_dir, tolerance=0.01):
-    return True
+    """对称性需要场数据/积分面证据；当前工具未实现时返回 ``None``。"""
+    return None
 
 def flow_metrics(*, rho=1.225, velocity=1.0, length=1.0, mu=1.81e-5, dt=None, cell_size=None, speed_of_sound=343.0):
     result = {"reynolds": reynolds_number(rho, velocity, length, mu=mu), "dynamic_pressure": dynamic_pressure(rho, velocity), "mach": mach_number(velocity, speed_of_sound)}

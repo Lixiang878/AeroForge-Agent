@@ -29,7 +29,7 @@ def test_render_case_skips_without_result_field(tmp_path):
     r = render_case(case)
     assert r["status"] == "skipped"
     assert r["images"] == []
-    assert "无收敛场" in r["note"]
+    assert "非零时刻 U" in r["note"]
 
 
 def test_final_report_accepts_visualization_note():

@@ -8,10 +8,10 @@ def test_dry_run_honest(tmp_path, monkeypatch):
     """dry-run：产出报告，但可视化 0 张（不伪造图像）、Cd 为 None。"""
     monkeypatch.setattr(rb, 'detect_runtime', lambda *a, **k: rb.RuntimeInfo(backend='unavailable'))
     r = asyncio.run(OrchestratorAgent(tmp_path).run(
-        '做一辆 2026 款宝马 X3 的迎风 CFD 测试，风速 30 km/h，稳态不可压'))
+        '做一个 Ahmed body 的迎风 CFD 测试，风速 30 km/h，稳态不可压'))
     report = r['report']
     assert report.task.velocity == pytest.approx(8.333333)
-    assert report.task.object_name == '宝马X3'      # 车型关键词提取
+    assert report.task.object_name == 'Ahmed body'
     assert report.markdown_report_path.exists()
     assert report.visualization_paths == []          # 不再产出假图
     assert '不伪造' in report.visualization_note
