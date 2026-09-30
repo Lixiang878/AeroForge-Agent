@@ -28,6 +28,7 @@ CASE = sys.argv[1] if len(sys.argv) > 1 else None
 UFREE = float(sys.argv[2]) if len(sys.argv) > 2 else None
 BODY_COLOUR = ([float(value) for value in sys.argv[3].split(",")]
                if len(sys.argv) > 3 else [0.065, 0.16, 0.28])
+LABEL = sys.argv[4] if len(sys.argv) > 4 else ""
 if not CASE:
     raise SystemExit("usage: streamline_hd.py <case_dir> [u_free_mps]")
 if len(BODY_COLOUR) != 3 or any(value < 0.0 or value > 1.0 for value in BODY_COLOUR):
@@ -50,6 +51,7 @@ from paraview.simple import (  # noqa: E402
     Show,
     STLReader,
     StreamTracerWithCustomSource,
+    Text,
     Tube,
 )
 
@@ -148,11 +150,18 @@ def set_blue_red_speed_lut(lut, lower, upper, mode):
 
 
 def fetched_streamline_velocity_range(tracers):
-    """Fetch actual StreamTracer U arrays and return their finite speed range."""
+    """Fetch actual StreamTracer U arrays and return their finite speed range.
+
+    Returns ``(colour_min, colour_max, sampled_min, sampled_max)``.  The
+    colour span is the 1st-99th percentile of the samples: the raw min-max
+    range is stretched by rarely visited extremes (a few separated wake
+    filaments), which starves the mid-band — where almost all of the flow
+    lives — of colour contrast.  The absolute min/max stay available for
+    validation and metadata; colours saturate outside the percentile band.
+    """
     if not tracers:
         raise ValueError("no StreamTracer available for static U colour scale")
-    minimum = None
-    maximum = None
+    speeds = []
     for tracer in tracers:
         data = servermanager.Fetch(tracer)
         if data is None or not data.GetPoints():
@@ -164,13 +173,19 @@ def fetched_streamline_velocity_range(tracers):
             vector = tuple(float(value) for value in vectors.GetTuple(point_id))
             if len(vector) != 3 or any(not math.isfinite(value) for value in vector):
                 raise ValueError("StreamTracer U samples must be finite 3-D vectors")
-            speed = math.sqrt(builtins.sum(value * value for value in vector))
-            minimum = speed if minimum is None else builtins.min(minimum, speed)
-            maximum = speed if maximum is None else builtins.max(maximum, speed)
-    if (minimum is None or maximum is None or not math.isfinite(minimum)
-            or not math.isfinite(maximum) or maximum <= 0.0):
+            speeds.append(math.sqrt(builtins.sum(value * value for value in vector)))
+    if not speeds:
         raise ValueError("StreamTracer U samples contain no positive finite speed")
-    return minimum, maximum
+    speeds.sort()
+    sampled_min, sampled_max = speeds[0], speeds[-1]
+    if not math.isfinite(sampled_min) or not math.isfinite(sampled_max) or sampled_max <= 0.0:
+        raise ValueError("StreamTracer U samples contain no positive finite speed")
+
+    def percentile(fraction):
+        index = min(len(speeds) - 1, max(0, int(round(fraction * (len(speeds) - 1)))))
+        return speeds[index]
+
+    return percentile(0.01), percentile(0.99), sampled_min, sampled_max
 
 
 def fetched_streamline_velocity_max(tracers):
@@ -178,8 +193,14 @@ def fetched_streamline_velocity_max(tracers):
     return fetched_streamline_velocity_range(tracers)[1]
 
 
-def incoming_yz_seed(domain_bounds, vehicle_bounds, columns=15, rows=11):
-    """Return a finite near-body YZ plane, not the full-domain inlet."""
+def incoming_yz_seed(domain_bounds, vehicle_bounds, columns=17, rows=15):
+    """Return a finite near-body YZ plane, not the full-domain inlet.
+
+    The plane tops out at 0.35 body heights above the roof (down from 0.60):
+    higher seeds only produce distant freestream lines that crowd the frame,
+    while the extra rows are spent where flow structure actually lives —
+    underbody and lower body.
+    """
     domain = tuple(float(value) for value in domain_bounds)
     vehicle = tuple(float(value) for value in vehicle_bounds)
     if len(domain) != 6 or len(vehicle) != 6:
@@ -200,7 +221,7 @@ def incoming_yz_seed(domain_bounds, vehicle_bounds, columns=15, rows=11):
     y_min = max(dy0 + eps, vy0 - 0.20 * width)
     y_max = min(dy1 - eps, vy1 + 0.20 * width)
     z_min = max(dz0 + eps, vz0 - eps)
-    z_max = min(dz1 - eps, vz1 + 0.60 * height)
+    z_max = min(dz1 - eps, vz1 + 0.35 * height)
     if y_min >= y_max or z_min >= z_max:
         raise ValueError("near-body seed plane has no valid internalMesh area")
     return {
@@ -342,15 +363,20 @@ def make_stream_tubes():
 stream_displays = (make_stream_tubes(),)
 
 try:
-    sampled_u_min, sampled_u_max = fetched_streamline_velocity_range(stream_tracers)
+    colour_floor, colour_ceiling, sampled_u_min, sampled_u_max = (
+        fetched_streamline_velocity_range(stream_tracers))
     validate_sampled_speed(sampled_u_max, source_u_max)
 except ValueError as exc:
     raise SystemExit(f"[hd] cannot determine static U colour range: {exc}")
-UMAX = static_velocity_color_max(sampled_u_max)
-COLOUR_MODE = velocity_colour_scale_mode(sampled_u_min, UMAX)
-COLOUR_MIN = sampled_u_min
+# Percentile trimming only helps when the sample distribution is skewed; if
+# the trimmed span collapses (near-uniform speeds) keep the full min-max span.
+if colour_ceiling - colour_floor < 0.35 * (sampled_u_max - sampled_u_min):
+    colour_floor, colour_ceiling = sampled_u_min, sampled_u_max
+UMAX = static_velocity_color_max(colour_ceiling)
+COLOUR_MODE = velocity_colour_scale_mode(colour_floor, UMAX)
+COLOUR_MIN = colour_floor
 print(f"[hd] sampled |U| range: {sampled_u_min:.6g} .. {sampled_u_max:.6g} m/s; "
-      f"colour range: {COLOUR_MIN:.6g} .. {UMAX:.6g} m/s ({COLOUR_MODE})")
+      f"colour range (1st-99th pct): {COLOUR_MIN:.6g} .. {UMAX:.6g} m/s ({COLOUR_MODE})")
 
 # Use the same finite incoming plane for sparse direction arrows.  The arrow
 # length is fixed (no magnitude scaling); only colour encodes |U|.
@@ -360,9 +386,9 @@ seed_sampled.UpdatePipeline()
 seed_arrows = Glyph(Input=seed_sampled, GlyphType="Arrow")
 setp(seed_arrows, ("OrientationArray", "orientation_array"), ["POINTS", "U"])
 setp(seed_arrows, ("ScaleArray", "scale_array"), ["POINTS", "No scale array"])
-setp(seed_arrows, ("ScaleFactor", "scale_factor"), 0.10 * height)
+setp(seed_arrows, ("ScaleFactor", "scale_factor"), 0.085 * height)
 setp(seed_arrows, ("GlyphMode", "glyph_mode"), "Every Nth Point")
-setp(seed_arrows, ("Stride", "stride"), 4)
+setp(seed_arrows, ("Stride", "stride"), 10)
 seed_arrows.UpdatePipeline()
 arrow_display = Show(seed_arrows, view)
 arrow_neutral_colour(arrow_display)
@@ -409,9 +435,11 @@ setp(bar, ("DrawFrame",), 1)
 bar.Visibility = 1
 
 
-def save_shot(position, focal_point, filename):
+def save_shot(position, focal_point, filename, frame_scale=None,
+              image_size=(2400, 1350)):
     camera = view.GetActiveCamera()
-    frame_scale = max(1.20 * height, 0.70 * length)
+    if frame_scale is None:
+        frame_scale = max(1.20 * height, 0.70 * length)
     # Set both the RenderView proxy properties and the VTK camera.  The proxy
     # is what ParaView reapplies on the first Render after a pipeline update;
     # setting only GetActiveCamera() lets that render silently ResetCamera().
@@ -428,9 +456,23 @@ def save_shot(position, focal_point, filename):
     Render(view)
     output = os.path.join(case, "results", filename)
     os.makedirs(os.path.dirname(output), exist_ok=True)
-    SaveScreenshot(output, view, ImageResolution=[2400, 1350],
+    SaveScreenshot(output, view, ImageResolution=list(image_size),
                    TransparentBackground=0)
     print("[hd] saved:", output)
+
+
+# One-line case annotation, top-left, window-anchored so it never overlaps
+# the vehicle in any camera.  Only shown when a label is provided.
+if LABEL:
+    note = Text()
+    note.Text = LABEL
+    note_display = Show(note, view)
+    setp(note_display, ("Position",), [0.018, 0.958])
+    text_prop = getattr(note_display, "TextProperties", None)
+    if text_prop is not None:
+        setp(text_prop, ("FontFactor", "FontSize"), 17)
+        setp(text_prop, ("Color",), [0.08, 0.16, 0.24])
+        setp(text_prop, ("Opacity",), 0.92)
 
 
 # The first render lets ParaView initialise the renderer.  Without this
@@ -441,18 +483,24 @@ Render(view)
 # The solver convention is flow from x-min to x-max.
 save_shot(
     (cx - 1.28 * length, cy - 1.48 * width, z0 + 0.78 * height),
-    (cx + 0.05 * length, cy, z0 + 0.43 * height),
+    (cx + 0.05 * length, cy, z0 + 0.47 * height),
     "streamline_hd_front.png",
+    frame_scale=max(1.05 * height, 0.62 * length),
 )
 save_shot(
     (cx + 1.40 * length, cy - 1.30 * width, z0 + 1.02 * height),
-    (x1 + 0.36 * length, cy, z0 + 0.52 * height),
+    (x1 + 0.36 * length, cy, z0 + 0.55 * height),
     "streamline_hd_wake.png",
+    frame_scale=max(1.05 * height, 0.62 * length),
 )
+# Side view is panoramic: a wide 21:9-ish frame keeps the full streamline
+# run while cutting the dead space below the ground plane.
 save_shot(
-    (cx + 0.12 * length, cy - 3.25 * width, z0 + 0.61 * height),
-    (cx + 0.22 * length, cy, z0 + 0.46 * height),
+    (cx + 0.12 * length, cy - 3.25 * width, z0 + 0.78 * height),
+    (cx + 0.22 * length, cy, z0 + 0.58 * height),
     "streamline_hd_side.png",
+    frame_scale=max(0.95 * height, 0.50 * length),
+    image_size=(2560, 1080),
 )
 
 with open(os.path.join(case, "results", "static_velocity_metadata.json"), "w", encoding="utf-8") as handle:
@@ -464,6 +512,8 @@ with open(os.path.join(case, "results", "static_velocity_metadata.json"), "w", e
         "colour_scale_min_mps": COLOUR_MIN, "colour_scale_max_mps": UMAX,
         "colour_scale_mode": COLOUR_MODE, "colour_scale_title": bar.Title,
         "colour_preset": "blue-cyan-yellow-red (#2166ac to #d73027)",
-        "colour_scale_source": "full-resolution streamline U samples plus 8% headroom",
+        "colour_scale_source": ("1st-99th percentile of full-resolution "
+                                "streamline U samples plus 8% headroom"),
+        "case_label": LABEL,
         "seed_plane": seed_window,
     }, handle, indent=2)
