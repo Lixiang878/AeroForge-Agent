@@ -1,8 +1,31 @@
 # Changelog
 
-## Unreleased - 2026-08-31
+## 0.5.0 - 2026-09-30
 
-### Visualization and vehicle asset refinement
+### Parallel solving
+- `--n-parallel N` (CLI / `run_drivaerml.py` / `CaseSpec(n_parallel=N)`) runs
+  `decomposePar -force -> mpirun -np N <solver> -parallel -> reconstructPar`
+  with an auto-generated scotch `decomposeParDict`; steady cases reconstruct
+  only the latest time, transient cases reconstruct all times for animation.
+  Solver logs are named `log.<solver>` (not `log.env`).
+- `parse_force_coeffs` now reads both serial `postProcessing/` and parallel
+  `processor*/postProcessing/` outputs, aligns ranks by time step, and
+  self-detects whether ranks hold reduced global values (take one) or local
+  integrals (sum). It also adapts to ESI v2412 master-only parallel writing
+  into the root `postProcessing/`.
+- `SimulationPilot` reports the failed stage (e.g. `decomposePar`) and a
+  failed `reconstructPar` never masks a completed solve; divergence cannot
+  be promoted to a result (existing gates).
+- Verified on a real WSL/OpenFOAM v2412 case (191,628 cells): the parallel
+  chain (decompose -> 8-core mpirun -> reconstruct -> parse) completed and
+  the first 12 iterations match the serial showcase Cd evolution
+  (iter 10: -2431 parallel vs -2273 serial). The same coarse showcase case
+  diverged at ~step 49 under 8-way decomposition while the serial run was
+  still oscillating between +/-3000 — a numerical-stiffness margin issue of
+  that case, documented in `docs/TUTORIAL.md` §4, not a chain defect.
+- Offline regression suite: 193 tests green (was 158+).
+
+### Visualization and vehicle asset refinement (2026-08-31)
 - Re-rendered the DrivAerML showcase with a light paper-style composition,
   explicit blue-cyan-yellow-red colouring (`#2166ac` to `#d73027`), a data-driven physical speed range with
   8% headroom, and automatic log10 scaling only when the sampled `|U|` span is
@@ -16,9 +39,7 @@
   the original OBJ remains the provenance record and neither asset is accepted as
   a CFD wall until a separately repaired watertight exterior passes `surfaceCheck`.
 
-## Unreleased - 2026-08-30
-
-### Reliability audit
+### Reliability audit (2026-08-30)
 - Added a fail-closed asset manifest for named production vehicles: source URL,
   license, SHA-256, units, axes and rights must accompany an uploaded STL;
   missing or mismatched evidence no longer falls back to the simplified car.

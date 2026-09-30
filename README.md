@@ -103,6 +103,12 @@ RequirementParser → GeometryHunter → PhysicsConfig → MeshSmith → Simulat
 - **RuntimeBridge** routes every OpenFOAM call to an available backend:
   native install, or **WSL on Windows** (auto-detected), with explicit
   dry-run when nothing is found.
+- **Parallel solving (v0.5.0)**: `--n-parallel N` runs `decomposePar →
+  mpirun -np N <solver> -parallel → reconstructPar` automatically
+  (scotch decomposition, dict auto-generated). Force-coefficient parsing
+  handles both parallel functionObject behaviours (reduced global values
+  per rank, or local integrals summed). Verified against serial on a real
+  WSL case: identical Cd evolution over the first 12 iterations.
 - **Wind angle (yaw)** rotates the inlet vector, moving ground and drag
   direction together (`风向角 30°` just works).
 - Force coefficients come with a **pressure/viscous breakdown** parsed
@@ -125,9 +131,10 @@ pytest -q                                    # offline unit tests (no OpenFOAM n
 python examples/demo_bmw_x3.py x3.stl x3.manifest.json  # licensed model + manifest
 python examples/run_drivaerml.py body.stl    # public DrivAerML smoke run
 python examples/run_drivaerml.py body.stl --profile showcase --iterations 800  # converged-wake render demo
+python examples/run_drivaerml.py body.stl --profile showcase --n-parallel 8    # same, 8-core parallel solve
 python examples/paraview/streamline_hd.py <case_dir>   # re-render any solved case
 python examples/verify_ahmed.py              # end-to-end validation vs experiment
-aeroforge "vehicle CFD 30 m/s" --upload-stl body.stl --model-manifest model.json --animation
+aeroforge "vehicle CFD 30 m/s" --upload-stl body.stl --model-manifest model.json --animation --n-parallel 8
 ```
 
 OpenFOAM: Linux → PATH; Windows → install inside WSL (RuntimeBridge
@@ -169,7 +176,7 @@ roadmap. Every number above is a real solver output.
 物理配置（从零生成完整 OpenFOAM 算例；风向角旋转入口矢量/移动地面/阻力
 方向）、网格（blockMesh → surfaceFeatureExtract → snappyHexMesh →
 checkMesh 质量门禁）、求解（simpleFoam/pimpleFoam k-ω SST；残差、连续性、日志结束标记、力系数门禁及压差/摩擦
-分解）、分析与可视化（pvpython 三机位烟线图嵌入 Markdown 报告）。
+分解；`--n-parallel N` 一键 decomposePar + mpirun 并行并重建场）、分析与可视化（pvpython 三机位烟线图嵌入 Markdown 报告）。
 
 核心契约用 Pydantic v2 定义；编排为直接协程调用（v0.2.0 的
 message_bus/state_machine 从未被使用，v0.4.0 已删除）。
@@ -183,9 +190,10 @@ pytest -q                                    # 离线单元测试（无需 OpenF
 python examples/demo_bmw_x3.py x3.stl x3.manifest.json  # 授权模型 + 资产清单
 python examples/run_drivaerml.py body.stl    # 公开 DrivAerML 真实几何冒烟
 python examples/run_drivaerml.py body.stl --profile showcase --iterations 800  # 尾流展示图（延长稳态迭代）
+python examples/run_drivaerml.py body.stl --profile showcase --n-parallel 8    # 同上，8 核并行求解
 python examples/paraview/streamline_hd.py <case_dir>   # 对已求解算例重新渲染
 python examples/verify_ahmed.py              # 端到端基准验证
-aeroforge "车辆外流场 30 m/s" --upload-stl body.stl --model-manifest model.json --animation
+aeroforge "车辆外流场 30 m/s" --upload-stl body.stl --model-manifest model.json --animation --n-parallel 8
 ```
 
 OpenFOAM 接入：Linux 装到 PATH；Windows 在 WSL 中安装（自动探测）。

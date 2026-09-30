@@ -46,9 +46,33 @@ def run_mesh_sequence(case_dir: Path, bridge: RuntimeBridge,
 
 
 def run_solver(case_dir: Path, bridge: RuntimeBridge, solver: str = "simpleFoam",
-               timeout: float = 14400.0) -> dict:
-    """运行求解器，返回 {dry_run, returncode, log_path}。"""
-    return bridge.run([solver], cwd=case_dir, timeout=timeout)
+               timeout: float = 14400.0, parallel: bool = False,
+               n_parallel: int = 8) -> dict:
+    """运行求解器；parallel=True 时走 decomposePar → mpirun -parallel → reconstructPar。
+
+    返回统一含 {dry_run, returncode, log_path, stage}；stage 指明失败所在
+    阶段（decomposePar / 求解器名 / done）。reconstructPar 失败不掩盖求解
+    结果，以 reconstruct_returncode 附加返回（场仍在 processor 目录可读）。
+    瞬态求解器重建全部时间步（动画需要时间序列），稳态只重建最新场。
+    """
+    if not parallel:
+        return {**bridge.run([solver], cwd=case_dir, timeout=timeout), "stage": solver}
+    res = bridge.run(["decomposePar", "-force"], cwd=case_dir, timeout=timeout)
+    if res.get("dry_run") or res["returncode"] != 0:
+        return {**res, "stage": "decomposePar"}
+    # OMPI 变量兼容 root 身份（WSL 默认用户为 root 时 OpenMPI 拒绝启动）；
+    # 日志显式按求解器命名，否则会落到 argv[0] 的 log.env
+    cmd = ["env", "OMPI_ALLOW_RUN_AS_ROOT=1", "OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1",
+           "mpirun", "-np", str(n_parallel), solver, "-parallel"]
+    res = bridge.run(cmd, cwd=case_dir,
+                     log_path=Path(case_dir) / f"log.{solver}", timeout=timeout)
+    if res.get("dry_run") or res["returncode"] != 0:
+        return {**res, "stage": solver}
+    rec = bridge.run(["reconstructPar"] if solver.startswith("pimpleFoam")
+                     else ["reconstructPar", "-latestTime"],
+                     cwd=case_dir, timeout=timeout)
+    return {**res, "stage": "done",
+            "reconstruct_returncode": rec.get("returncode")}
 
 
 def run_checkmesh(case_dir: Path, bridge: RuntimeBridge,
@@ -102,15 +126,24 @@ def parse_continuity_error(log_path: str | Path) -> float | None:
     return abs(float(values[-1])) * 100.0
 
 
+def _force_coeff_candidate_files(case_dir: str | Path) -> list[Path]:
+    """所有 forceCoeffs dat 候选：串行根目录 + 并行各 processor 目录。"""
+    patterns = ("postProcessing/forceCoeffs*/*/*.dat",
+                "processor*/postProcessing/forceCoeffs*/*/*.dat")
+    files: list[Path] = []
+    for pat in patterns:
+        files.extend(Path(case_dir).glob(pat))
+    return files
+
+
 def _latest_force_coeff_file(case_dir: str | Path) -> Path | None:
     """按数据中的最大时间选择 forceCoeffs 文件，而不是按文件名排序。
 
     重跑或并行后处理可能同时留下 ``coefficient.dat``、
     ``coefficient_0.dat`` 等文件；字典序会把较旧的文件选中。
     """
-    files = list(Path(case_dir).glob("postProcessing/forceCoeffs*/*/*.dat"))
     candidates: list[tuple[float, int, str, Path]] = []
-    for path in files:
+    for path in _force_coeff_candidate_files(case_dir):
         last_time: float | None = None
         try:
             for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -129,6 +162,51 @@ def _latest_force_coeff_file(case_dir: str | Path) -> Path | None:
                 mtime = 0
             candidates.append((last_time, mtime, path.name, path))
     return max(candidates, key=lambda item: item[:3])[3] if candidates else None
+
+
+def _rank_files_for(case_dir: Path, selected: Path) -> list[Path]:
+    """同一时间序列的全部 rank 文件。
+
+    selected 落在 processor 目录时返回所有 rank 的同位文件；串行时单文件。
+    """
+    try:
+        rel = selected.relative_to(Path(case_dir))
+    except ValueError:
+        return [selected]
+    parts = rel.parts
+    if parts and parts[0].startswith("processor"):
+        pattern = str(Path("processor*").joinpath(*parts[1:]))
+        return sorted(Path(case_dir).glob(pattern)) or [selected]
+    return [selected]
+
+
+def _read_coeff_file(path: Path) -> tuple[list[str], list[list[float]]]:
+    """读单个 dat：返回表头列名（小写）与数值行。"""
+    header_cols: list[str] = []
+    rows: list[list[float]] = []
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if line.startswith("#"):
+            if not header_cols:
+                header_cols = [c.strip().lower() for c in line.lstrip("#").split()]
+        elif line.strip():
+            try:
+                rows.append([float(x) for x in line.split()])
+            except ValueError:
+                continue
+    return header_cols, rows
+
+
+def _aggregate_rank_values(values: list[float]) -> float:
+    """合并同一时间步各 rank 的系数值。
+
+    ESI v2412 各 processor 写的是 reduce 后的全局汇总值（各 rank 相同），
+    取任一即可；若实现写局部积分（各 rank 不同），求和才是整机系数。
+    以相对容差区分两种情形。
+    """
+    lo, hi = min(values), max(values)
+    if hi - lo <= 1e-9 * max(1.0, abs(hi)):
+        return values[0]
+    return sum(values)
 
 
 def parse_force_breakdown(log_path: str | Path) -> dict[str, float]:
@@ -155,30 +233,40 @@ def parse_force_breakdown(log_path: str | Path) -> dict[str, float]:
 
 
 def parse_force_coeffs(case_dir: str | Path) -> ForceCoeffs | None:
-    """解析 forceCoeffs 后处理输出 coefficient.dat。
+    """解析 forceCoeffs 后处理输出 coefficient.dat（串行与并行 case 通用）。
 
     稳健解析：优先读表头中的列名定位 Cd/Cl/Cm；无表头时按位置回退
-    (Time Cd Cl Cm ...)。返回最后若干迭代的均值（稳态尾段）。
+    (Time Cd Cl Cm ...)。并行时按时间步对齐各 rank 文件合并（见
+    _aggregate_rank_values）。返回最后若干迭代的均值（稳态尾段）。
     """
+    case_dir = Path(case_dir)
     selected = _latest_force_coeff_file(case_dir)
     if selected is None:
         return None
-    text = selected.read_text(encoding="utf-8", errors="ignore")
-    header_cols: list[str] = []
-    for line in text.splitlines():
-        if line.startswith("#"):
-            header_cols = [c.strip().lower() for c in line.lstrip("#").split()]
-        else:
-            break
-    rows: list[list[float]] = []
-    for line in text.splitlines():
-        if not line or line.startswith("#"):
-            continue
-        try:
-            rows.append([float(x) for x in line.split()])
-        except ValueError:
-            continue
-    if not rows:
+    rank_files = _rank_files_for(case_dir, selected)
+    parsed = [_read_coeff_file(p) for p in rank_files]
+    header_cols = parsed[0][0]
+    base_rows = parsed[0][1]
+    if not base_rows:
+        return None
+
+    # 各 rank 按 rank0 的时间轴对齐（同一时间步每 rank 各写一行；
+    # 缺行时丢弃该时间步，避免错位相加）
+    other_maps = []
+    for _, rows in parsed[1:]:
+        other_maps.append({round(r[0], 9): r for r in rows if r})
+    aligned: list[list[list[float]]] = []
+    for row in base_rows:
+        group = [row]
+        for m in other_maps:
+            match = m.get(round(row[0], 9))
+            if match is None:
+                group = []
+                break
+            group.append(match)
+        if group:
+            aligned.append(group)
+    if not aligned:
         return None
 
     def col_index(*names: str, fallback: int | None) -> int | None:
@@ -192,19 +280,20 @@ def parse_force_coeffs(case_dir: str | Path) -> ForceCoeffs | None:
     # 注意：dat 里的 Cd(f)/Cd(r) 列并非摩擦/压差分解（实测各约为 Cd 之半，
     # 与求解日志 forceCoeffs 块的 Pressure/Viscous 分解对不上）；本解析
     # 只取总量列 Cd(1)/Cl(4)/CmPitch(7)，压差-摩擦分解见 parse_force_breakdown。
-    ncols = len(rows[0])
+    ncols = len(aligned[0][0])
     if ncols >= 8:
         i_cd, i_cl, i_cm = 1, 4, 7
     else:
         i_cd = col_index("cd", fallback=1)
         i_cl = col_index("cl", fallback=2)
         i_cm = col_index("cm", fallback=3)
-    tail = rows[-max(2, len(rows) // 10):]  # 稳态尾段均值，抑制瞬时抖动
+    tail = aligned[-max(2, len(aligned) // 10):]  # 稳态尾段均值，抑制瞬时抖动
 
     def mean(idx: int | None) -> float | None:
-        if idx is None or idx >= len(tail[0]):
+        if idx is None or idx >= len(tail[0][0]):
             return None
-        vals = [r[idx] for r in tail if idx < len(r)]
+        vals = [_aggregate_rank_values([g[idx] for g in group])
+                for group in tail if idx < len(group[0])]
         return sum(vals) / len(vals) if vals else None
 
     cd = mean(i_cd)

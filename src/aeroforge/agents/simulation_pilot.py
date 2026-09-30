@@ -57,8 +57,12 @@ class SimulationPilotAgent:
                                            notes=[note]),
                     'notes':[note]}
         before_force_coeff = _force_coeff_signature(case)
+        spec = config.get('spec')
+        n_parallel = getattr(spec, 'n_parallel', None)
+        parallel = bool(n_parallel and int(n_parallel) > 1)
         t0=time.perf_counter()
-        res=run_solver(case,bridge,solver=config.get('solver','simpleFoam'))
+        res=run_solver(case,bridge,solver=config.get('solver','simpleFoam'),
+                       parallel=parallel,n_parallel=int(n_parallel) if n_parallel else 1)
         elapsed=time.perf_counter()-t0
         log=res.get('log_path')
         residuals=parse_residuals(log) if log else {}
@@ -93,7 +97,11 @@ class SimulationPilotAgent:
             if res.get('timed_out'):
                 notes.append('求解器超时，结果不完整')
             if res.get('returncode') != 0:
-                notes.append(f"求解器返回码为 {res.get('returncode')}")
+                stage = res.get('stage')
+                suffix = f"（{stage} 阶段失败）" if stage not in (None, 'done') else ''
+                notes.append(f"求解器返回码为 {res.get('returncode')}{suffix}")
+            if res.get('reconstruct_returncode', 0) not in (0, None):
+                notes.append('reconstructPar 重建失败，可视化只能读 processor 分区场')
             if high_residual:
                 notes.append(f"最终残差超过 {_RESIDUAL_TOLERANCE:g} 收敛门限")
             if missing_residuals:
@@ -109,11 +117,14 @@ class SimulationPilotAgent:
                 notes.append('日志未以 End 结束')
             if not notes:
                 notes.append('求解器未满足收敛门禁')
-        return {'status':'completed' if converged else 'failed',
+        payload = {'status':'completed' if converged else 'failed',
                 'runtime_backend':bridge.info.backend,
                 'simulation':SimReport(case_dir=case,converged=converged,
                                        final_residuals=residuals,force_coeffs=fc,
                                        flux_error_percent=round(continuity_error or 0.0, 6),
                                        runtime_seconds=round(elapsed,1), notes=notes),
                 'notes':notes}
+        if parallel:
+            payload['parallel'] = {'n_processes': int(n_parallel)}
+        return payload
 SimulationPilot=SimulationPilotAgent

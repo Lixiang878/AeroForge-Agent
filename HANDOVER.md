@@ -3,7 +3,28 @@
 > 写给接手的 AI / 工程师：本文档交代**已做工作、当前真实状态、已知坑、未完成事项**，
 > 并列出**需要复核的疑点**与验证方法。请带着审查眼光阅读——前任（我）的方案
 > 可能有误，欢迎推翻。
-> 最后更新：2026-08-31（工作区清理与布局固化；交互 XYZ 等单位显示比例修正、多形态交互可视化、8L/U∞ 示踪窗、DrivAerML run_2 独立复算）。
+> 最后更新：2026-09-30（v0.5.0：WSL 并行求解链路 `--n-parallel` + processor 力系数解析 + TUTORIAL 扩写；此前 2026-08-31 工作区清理、交互比例修正、DrivAerML run_2）。
+
+## 0.11. 并行求解链路（2026-09-30，v0.5.0）
+
+- `--n-parallel N`（CLI / `run_drivaerml.py` / `CaseSpec(n_parallel=N)`，N>1 生效）：
+  求解序列变为 `decomposePar -force → env OMPI_ALLOW_RUN_AS_ROOT=1 … mpirun -np N
+  <solver> -parallel → reconstructPar`；scotch 分区字典由 case_builder 自动生成
+  （该能力 v0.3.0 已有，此前从未被求解侧使用）。稳态只重建最新场，瞬态重建全部
+  时间步。求解日志显式命名 `log.<solver>`（否则 `bridge.run` 按 argv[0] 记成 `log.env`）。
+- `parse_force_coeffs` 兼容三种并行输出：根 `postProcessing/`（ESI v2412 实测
+  **master-only 汇总写**，串行路径直接覆盖）、`processor*/postProcessing/` 各 rank
+  写全局值（取单份）、各 rank 写局部积分（自动求和）；按时间步对齐，缺行丢弃。
+- 真实验证（WSL openfoam2412，191,628 单元 run_2 网格）：12 步链路全通
+  （decompose→8 核求解→reconstruct→解析），前 12 步 Cd 演化与串行 showcase 一致
+  （iter10：并行 -2431 vs 串行 -2273）。**同一 case 跑满 800 步时并行在第 ~49 步
+  发散**——但串行同期 Cd 也在 ±3000 震荡（iter30=-2782），最终串行 800 步收敛
+  0.252：归因为该粗网格 showcase case 的数值稳定裕度问题（均匀初场+大 deltaT），
+  不是链路缺陷；发散被门禁如实拒绝，不会晋升为结果。结论已写入 docs/TUTORIAL.md §4。
+- 离线回归 193 tests 全绿（新增 tests/test_parallel_solver.py：命令序列、失败短路、
+  全局/局部 rank 合并、pilot 接线）。
+- 未做（诚实清单）：并行下的 fvSolution 稳定性预设（如分区自动降 relax）；
+  snappyHexMesh 并行（记忆教训：12GB WSL 配额下 snappy 仍应串行）。
 
 ## 0.10. 工作区清理与布局固化（2026-08-31）
 

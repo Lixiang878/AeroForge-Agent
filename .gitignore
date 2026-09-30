@@ -11,3 +11,6 @@ workspace/
 dist/
 build/
 *.egg-info/
+
+# ZCode mimosa plugin local state
+.mimosa/

@@ -33,6 +33,9 @@ def main():
                    help="动画帧数（默认 120；稳态示踪粒子更连贯）")
     p.add_argument("--animation-fps", type=int, default=DEFAULT_ANIMATION_FPS,
                    help=f"动画帧率（默认 {DEFAULT_ANIMATION_FPS}；120 帧约 3 秒）")
+    p.add_argument("--n-parallel", type=int, default=None,
+                   help="并行核数（>1 时 decomposePar + mpirun 并行求解并重建场；"
+                        "默认串行）。建议 ≤ 物理核数；WSL 12GB 内存配额下 8 为稳妥档")
     p.add_argument("--no-viz", action="store_true", help="跳过高清可视化渲染")
     a = p.parse_args()
     try:
@@ -58,6 +61,10 @@ def main():
     kw["animation_fps"] = a.animation_fps
     if a.no_viz:
         kw["render"] = False
+    if a.n_parallel is not None:
+        if a.n_parallel < 1:
+            p.error("n-parallel must be >= 1")
+        kw["n_parallel"] = a.n_parallel
     try:
         r = asyncio.run(OrchestratorAgent(a.workspace).run(a.prompt, **kw))
     except (OSError, ValueError) as exc:

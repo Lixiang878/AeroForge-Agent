@@ -71,11 +71,19 @@ async def main() -> int:
         "--profile", choices=("smoke", "showcase"), default="smoke",
         help="smoke=快速导入验证；showcase=尾流加密并生成三机位图（仍非生产网格）",
     )
+    parser.add_argument(
+        "--n-parallel", type=int, default=None,
+        help="并行核数（>1 时 decomposePar + mpirun 并行求解；默认串行）",
+    )
     args = parser.parse_args()
     if not args.stl.exists():
         parser.error(f"STL not found: {args.stl}")
 
     settings = _profile_settings(args.profile)
+    if args.n_parallel is not None:
+        if args.n_parallel < 1:
+            parser.error("--n-parallel must be >= 1")
+        settings["n_parallel"] = args.n_parallel
     iterations = args.iterations if args.iterations is not None else _default_iterations(args.profile)
     state = await OrchestratorAgent(args.workspace).run(
         f"车辆外流场 {args.velocity:g} m/s",
