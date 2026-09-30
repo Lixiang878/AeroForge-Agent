@@ -278,7 +278,9 @@ def test_render_animation_builds_fresh_gif_from_paraview_frames(
     assert captured["command"][-3:] == ["4", expected_mode, str(case / "results" / "animation" / expected_mode / "frames")]
 
 
-def test_short_transient_case_never_falls_back_to_steady_animation(tmp_path):
+def test_short_transient_case_never_falls_back_to_steady_animation(tmp_path, monkeypatch):
+    # 语义断言与 pvpython 是否真实存在无关：mock 掉发现逻辑，CI/裸机同样可测
+    monkeypatch.setattr(viz, "find_pvpython", lambda: Path("pvpython"))
     case = tmp_path / "case"
     (case / "constant" / "polyMesh").mkdir(parents=True)
     (case / "0.1").mkdir()
@@ -318,7 +320,8 @@ def test_result_field_recognizes_positive_scientific_notation_times(tmp_path):
     assert viz._has_result_field(tmp_path)
 
 
-def test_unknown_solver_cannot_be_inferred_from_comment(tmp_path):
+def test_unknown_solver_cannot_be_inferred_from_comment(tmp_path, monkeypatch):
+    monkeypatch.setattr(viz, "find_pvpython", lambda: Path("pvpython"))
     (tmp_path / "constant" / "polyMesh").mkdir(parents=True)
     (tmp_path / "1").mkdir()
     (tmp_path / "1" / "U").write_text("internalField uniform (1 0 0);\n")

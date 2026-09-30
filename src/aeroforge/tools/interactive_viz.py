@@ -744,9 +744,10 @@ def build_interactive_figure(dataset: dict, vehicle_color: str = "#102947",
         scene={
             "dragmode": "orbit", "aspectmode": "manual",
             "aspectratio": focus["aspectratio"], "camera": camera,
-            "xaxis": {"title": "x (m)", "range": focus["ranges"]["x"], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6", "titlefont": {"color": _PAPER_TEXT}},
-            "yaxis": {"title": "y (m)", "range": focus["ranges"]["y"], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6", "titlefont": {"color": _PAPER_TEXT}},
-            "zaxis": {"title": "z (m)", "range": focus["ranges"]["z"], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6", "titlefont": {"color": _PAPER_TEXT}},
+            # plotly 6 移除了 scene 轴的 titlefont 属性；title dict 写法在 5.x/6.x 通用
+            "xaxis": {"title": {"text": "x (m)", "font": {"color": _PAPER_TEXT}}, "range": focus["ranges"]["x"], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6"},
+            "yaxis": {"title": {"text": "y (m)", "font": {"color": _PAPER_TEXT}}, "range": focus["ranges"]["y"], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6"},
+            "zaxis": {"title": {"text": "z (m)", "font": {"color": _PAPER_TEXT}}, "range": focus["ranges"]["z"], "gridcolor": _PAPER_GRID, "zerolinecolor": "#8ea5b6"},
             "bgcolor": _PAPER_BG,
         },
         updatemenus=[
