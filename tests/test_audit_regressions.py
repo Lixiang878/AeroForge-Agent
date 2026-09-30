@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -753,6 +754,8 @@ def test_report_exposes_continuity_gate_for_converged_run(tmp_path):
     assert "全局连续性误差: 0.05%" in text
 
 
+@pytest.mark.skipif(os.name != "nt",
+                    reason="WSL 探测分支仅在 Windows 上激活（os.name == 'nt'）")
 def test_runtime_selects_highest_numeric_openfoam_version(monkeypatch):
     import aeroforge.core.runtime_bridge as runtime_bridge
 
